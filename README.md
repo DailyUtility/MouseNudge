@@ -23,7 +23,7 @@ Please use it in line with your workplace's policies.
 
 ### From the disk image
 
-1. Download `MouseNudge-<version>.dmg` from [Releases](https://github.com/Mar-er/MouseNudge/releases) and drag MouseNudge to Applications.
+1. Download `MouseNudge-<version>.dmg` from [Releases](https://github.com/DailyUtility/MouseNudge/releases) and drag MouseNudge to Applications.
 2. The app is not notarized by Apple, so the first launch shows an "unidentified developer" or "can't be checked" warning. Either:
    - right-click MouseNudge in Applications and choose **Open**, then **Open** again, or
    - open it once, then go to **System Settings → Privacy & Security** and click **Open Anyway**.
@@ -35,7 +35,7 @@ Please use it in line with your workplace's policies.
 Needs the Xcode Command Line Tools (`xcode-select --install`).
 
 ```sh
-git clone https://github.com/Mar-er/MouseNudge.git
+git clone https://github.com/DailyUtility/MouseNudge.git
 cd MouseNudge
 ./build.sh --install      # builds build/MouseNudge.app, copies it to /Applications and starts it
 ```
@@ -115,7 +115,7 @@ MouseNudge 是一个 macOS 菜单栏小工具。在你的上班时间里，它�
 
 ### 安装
 
-1. 从 [Releases](https://github.com/Mar-er/MouseNudge/releases) 下载 `MouseNudge-<版本号>.dmg`，把 MouseNudge 拖进"应用程序"。
+1. 从 [Releases](https://github.com/DailyUtility/MouseNudge/releases) 下载 `MouseNudge-<版本号>.dmg`，把 MouseNudge 拖进"应用程序"。
 2. 这个 App 没有经过 Apple 公证，第一次打开时会提示"无法验证开发者"。可以用下面任一种方法打开：
    - 在"应用程序"里右键点 MouseNudge，选"打开"，再点一次"打开"。
    - 先双击打开一次，然后到"系统设置 → 隐私与安全性"，点"仍要打开"。
