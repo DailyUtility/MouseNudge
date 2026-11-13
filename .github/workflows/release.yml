@@ -1,0 +1,57 @@
+# Pushing a tag such as v1.0.1 runs the tests, builds MouseNudge-<version>.dmg and attaches it to a GitHub release.
+# The tag must match CFBundleShortVersionString in Resources/Info.plist.
+#
+# Signing: put the "MouseNudge Local Signing" certificate in the repository secrets so every release has the same
+# signature and people keep their Accessibility grant across updates:
+#   SIGNING_CERT_P12           the certificate and its private key exported as .p12, base64 encoded (base64 -i cert.p12)
+#   SIGNING_CERT_P12_PASSWORD  the password chosen when exporting it
+# Without them the release is signed ad hoc and Accessibility has to be granted again after each update.
+name: Release
+
+on:
+  push:
+    tags: ["v*"]
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: macos-15
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Check the tag matches the app version
+        run: |
+          version=$(/usr/libexec/PlistBuddy -c "Print :CFBundleShortVersionString" Resources/Info.plist)
+          if [ "$GITHUB_REF_NAME" != "v$version" ]; then
+            echo "::error::Tag $GITHUB_REF_NAME does not match Info.plist version $version"; exit 1
+          fi
+
+      - name: Test
+        run: ./tests/run.sh
+
+      - name: Import the signing certificate
+        env:
+          P12: ${{ secrets.SIGNING_CERT_P12 }}
+          P12_PASSWORD: ${{ secrets.SIGNING_CERT_P12_PASSWORD }}
+        run: |
+          if [ -z "$P12" ]; then echo "::warning::No signing certificate in secrets; signing ad hoc."; exit 0; fi
+          kc="$RUNNER_TEMP/signing.keychain-db"; pw=$(uuidgen)
+          echo "$P12" | base64 --decode > "$RUNNER_TEMP/cert.p12"
+          security create-keychain -p "$pw" "$kc"
+          security set-keychain-settings -lut 3600 "$kc"
+          security unlock-keychain -p "$pw" "$kc"
+          security import "$RUNNER_TEMP/cert.p12" -k "$kc" -P "$P12_PASSWORD" -T /usr/bin/codesign
+          security set-key-partition-list -S apple-tool:,apple: -s -k "$pw" "$kc" >/dev/null
+          security list-keychains -d user -s "$kc" $(security list-keychains -d user | tr -d '"')
+          rm "$RUNNER_TEMP/cert.p12"
+          echo "SIGN_IDENTITY=MouseNudge Local Signing" >> "$GITHUB_ENV"
+
+      - name: Build the disk image
+        run: ./make-dmg.sh
+
+      - name: Publish the release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh release create "$GITHUB_REF_NAME" build/MouseNudge-*.dmg --title "MouseNudge ${GITHUB_REF_NAME#v}" --generate-notes
