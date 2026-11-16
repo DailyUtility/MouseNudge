@@ -42,11 +42,22 @@ let holidayURL = URL(fileURLWithPath: dir + "/holidays.json")
 // Any iCalendar subscription (Apple's holiday calendars, officeholidays.com …), set from the menu;
 // webcal:// links are fetched over https. None by default: until one is set only weekends are days off.
 var holidaySource: String { UserDefaults.standard.string(forKey: "holidaySource") ?? "" }
+// Every calendar subscribed to, in the order added; the menu switches between them. Older versions kept only one.
+var holidaySources: [String] {
+    get { UserDefaults.standard.stringArray(forKey: "holidaySources") ?? (holidaySource.isEmpty ? [] : [holidaySource]) }
+    set { UserDefaults.standard.set(newValue, forKey: "holidaySources") }
+}
+// Each calendar's last fetch, by link, so switching back needs no network.
+let calendarCacheURL = URL(fileURLWithPath: dir + "/holiday-calendars.json")
+func cachedCalendars() -> [String: HolidayCache] {
+    (try? Data(contentsOf: calendarCacheURL)).flatMap { try? JSONDecoder().decode([String: HolidayCache].self, from: $0) } ?? [:]
+}
+func cacheCalendar(_ source: String, _ c: HolidayCache?) { var all = cachedCalendars(); all[source] = c; saveJSON(all, to: calendarCacheURL) }
 
 let dayKey: DateFormatter = { let f = DateFormatter(); f.locale = Locale(identifier: "en_US_POSIX"); f.dateFormat = "yyyy-MM-dd"; return f }()
 
 // `workdays` are make-up workdays (China's 补班): weekends the calendar says are worked, which count as working days.
-struct HolidayCache: Codable { var fetched: String; var years: [Int]; var days: [String: String]; var workdays: [String: String]? = nil }
+struct HolidayCache: Codable { var fetched: String; var years: [Int]; var days: [String: String]; var workdays: [String: String]? = nil; var name: String? = nil }
 var holidays = HolidayCache(fetched: "", years: [], days: [:])
 
 // Personal leave, kept apart from holidays.json so a holiday refetch never wipes it. Dates are inclusive yyyy-MM-dd.
@@ -215,7 +226,7 @@ func parseICS(_ text: String) -> HolidayCache? {
     }
     for key in workdays.keys { days[key] = nil }
     let years = Set(days.keys.compactMap { Int($0.prefix(4)) }).sorted()
-    return days.isEmpty ? nil : HolidayCache(fetched: ISO8601DateFormatter().string(from: Date()), years: years, days: days, workdays: workdays.isEmpty ? nil : workdays)
+    return days.isEmpty ? nil : HolidayCache(fetched: ISO8601DateFormatter().string(from: Date()), years: years, days: days, workdays: workdays.isEmpty ? nil : workdays, name: calName.isEmpty ? nil : icsUnescape(calName))
 }
 
 // Why a holiday calendar could not be used, with the title and advice shown to the person.
@@ -264,7 +275,7 @@ func refreshHolidays(from source: String = holidaySource, done: @escaping (Holid
             let failure: HolidayFetchError?
             if let c = parsed {
                 holidays = c
-                try? JSONEncoder().encode(c).write(to: holidayURL)
+                try? JSONEncoder().encode(c).write(to: holidayURL); cacheCalendar(source, c)
                 appendLog(T("log.holidayUpdated", c.years.map(String.init).joined(separator: "/"), String(c.days.count)))
                 failure = nil
             } else {
@@ -760,6 +771,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     let moreItem = NSMenuItem(title: "", action: nil, keyEquivalent: "")
     let loginItem = NSMenuItem(title: "", action: #selector(toggleLogin(_:)), keyEquivalent: "")
     let sourceItem = NSMenuItem(title: "", action: #selector(setHolidaySource), keyEquivalent: "")
+    // The saved holiday calendars, one ticked. Rebuilt only when they change: replacing the items of an open menu
+    // would drop the click.
+    let calendarsItem = NSMenuItem(title: "", action: nil, keyEquivalent: "")
+    var calendarsShown = [String]()
     let languageItem = NSMenuItem(title: "", action: nil, keyEquivalent: "")
     let quitItem = NSMenuItem(title: "", action: #selector(NSApplication.terminate(_:)), keyEquivalent: "q")
     // The last run's time and result key, kept so the line can be retitled in another language.
@@ -796,7 +811,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         more.submenu = NSMenu(); languageItem.submenu = NSMenu(); languageItem.submenu!.delegate = self
         loginItem.state = loginAgentOn ? .on : .off
         autoClearItem.state = autoClearLog ? .on : .off
-        [loginItem, languageItem, .separator(), sourceItem, refetchItem, clearSourceItem, .separator(), logItem, clearLogItem, autoClearItem].forEach(more.submenu!.addItem)
+        calendarsItem.submenu = NSMenu()
+        [loginItem, languageItem, .separator(), calendarsItem, .separator(), logItem, clearLogItem, autoClearItem].forEach(more.submenu!.addItem)
         for (root, key, sym) in [(leaveRoot, "leave", "airplane"), (overtimeRoot, "overtime", "briefcase"), (periodRoot, "periods", "calendar.day.timeline.left"), (tasksRoot, "tasks", "bell")] {
             root.representedObject = key
             let v = SectionHeaderView(symbol: sym); v.onClick = { [weak self, weak root] in if let root { self?.toggleSection(root) } }
@@ -845,7 +861,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     func retitle() {
         permLine.title = T("status.needAccessibility")
         refetchItem.title = T("menu.refetchHolidays"); clearSourceItem.title = T("menu.unsubscribeHoliday"); logItem.title = T("menu.openLog")
-        moreItem.title = T("menu.more"); loginItem.title = T("menu.openAtLogin"); sourceItem.title = T("menu.subscribeHoliday")
+        moreItem.title = T("menu.more"); loginItem.title = T("menu.openAtLogin"); sourceItem.title = T("menu.addHolidayCalendar"); calendarsItem.title = T("menu.holidayCalendars"); calendarsShown = []
         quitItem.title = T("menu.quit")
         // Always says "Language" too, so someone stuck in a language they can't read still finds it.
         languageItem.title = T("menu.language") == "Language" ? "Language" : T("menu.language") + " / Language"
@@ -1031,6 +1047,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         pauseItem.isHidden = !jobs.contains { $0.disabled != true }
         // With no source there is nothing to refetch or clear.
         refetchItem.isHidden = holidaySource.isEmpty; clearSourceItem.isHidden = holidaySource.isEmpty
+        buildCalendarsMenu()
         pauseItem.title = paused ? T("menu.resume") : T("menu.pause")
         if !fetching {
             let k = dayKey.string(from: now)
@@ -1794,7 +1811,36 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     }
     @objc func noop() {}
 
-    @objc func setHolidaySource() { askHolidaySource(holidaySource) }
+    func buildCalendarsMenu() {
+        let cache = cachedCalendars()
+        let rows = (holidaySources + [""]).map { source in
+            (source, source.isEmpty ? T("menu.noHolidayCalendar")
+                : (source == holidaySource ? holidays.name : nil) ?? cache[source]?.name ?? source.replacingOccurrences(of: #"^\w+://"#, with: "", options: .regularExpression))
+        }
+        let shown = rows.map { $0.0 + "\t" + $0.1 } + [holidaySource]
+        guard shown != calendarsShown, let menu = calendarsItem.submenu else { return }
+        calendarsShown = shown; menu.removeAllItems()
+        for (source, name) in rows {
+            let it = NSMenuItem(title: name, action: #selector(switchHolidayCalendar(_:)), keyEquivalent: "")
+            it.target = self; it.representedObject = source; it.toolTip = source.isEmpty ? nil : source
+            it.state = source == holidaySource ? .on : .off
+            menu.addItem(it)
+        }
+        [.separator(), sourceItem, refetchItem, clearSourceItem].forEach(menu.addItem)
+    }
+    // Switching uses the calendar's saved copy at once and fetches it only when that is missing or from an earlier year.
+    @objc func switchHolidayCalendar(_ sender: NSMenuItem) {
+        guard !fetching, let source = sender.representedObject as? String, source != holidaySource else { return }
+        holidaySources = holidaySources  // keeps an older version's single calendar in the list once none is in use
+        if !holidaySource.isEmpty, !holidays.days.isEmpty { cacheCalendar(holidaySource, holidays) }
+        guard !source.isEmpty else { removeHolidaySource(log: T("log.holidayNone")); return }
+        UserDefaults.standard.set(source, forKey: "holidaySource"); autoFetchFailed = nil
+        holidays = cachedCalendars()[source] ?? HolidayCache(fetched: "", years: [], days: [:])
+        try? JSONEncoder().encode(holidays).write(to: holidayURL)
+        appendLog(T("log.holidaySwitched", holidays.name ?? source))
+        next = nextSlot(after: Date()); tick(); checkHolidays()
+    }
+    @objc func setHolidaySource() { askHolidaySource("") }
     func askHolidaySource(_ initial: String) {
         NSApp.activate(ignoringOtherApps: true)
         let field = NSTextField(string: initial); field.frame.size.width = 380; field.placeholderString = "https://example.com/holidays.ics"
@@ -1804,17 +1850,20 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         a.window.initialFirstResponder = field
         guard a.runModal() == .alertFirstButtonReturn, !fetching else { return }
         let source = field.stringValue.trimmingCharacters(in: .whitespacesAndNewlines)
-        if source.isEmpty { removeHolidaySource(); return }
+        if source.isEmpty { return }
         // Checked before going online, so a typo or a bare word gets an answer straight away.
         if holidayFeedURL(source) == nil { holidayProblem(.badAddress, link: source); return }
         guard online else { holidayProblem(.offline, link: source); return }
         fetching = true; holidayLine.title = T("status.holidaysFetching")
+        let (previous, previousDays) = (holidaySource, holidays)
         refreshHolidays(from: source) { [weak self] failure in
             guard let self else { return }
             self.fetching = false
             if let failure {
                 self.holidayProblem(failure, link: source)
             } else {
+                if !previous.isEmpty, previous != source, !previousDays.days.isEmpty { cacheCalendar(previous, previousDays) }
+                if !holidaySources.contains(source) { holidaySources.append(source) }
                 UserDefaults.standard.set(source, forKey: "holidaySource"); self.autoFetchFailed = nil
                 appendLog(T("log.holidayChanged", source))
             }
@@ -1833,12 +1882,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     @objc func refetchHolidays() { checkHolidays(force: true, report: true) }
     @objc func clearHolidaySource() {
         guard !fetching, confirmRemove(T("confirm.unsubscribe"), T("confirm.unsubscribeText"), ok: T("confirm.unsubscribeOk"), keep: T("common.keep")) else { return }
+        let source = holidaySource
+        holidaySources.removeAll { $0 == source }; cacheCalendar(source, nil)
         removeHolidaySource()
     }
-    func removeHolidaySource() {
+    func removeHolidaySource(log: String = T("log.holidayUnsubscribed")) {
         UserDefaults.standard.removeObject(forKey: "holidaySource")
         holidays = HolidayCache(fetched: "", years: [], days: [:]); try? FileManager.default.removeItem(at: holidayURL)
-        appendLog(T("log.holidayUnsubscribed")); next = nextSlot(after: Date()); tick()
+        appendLog(log); next = nextSlot(after: Date()); tick()
     }
     // Turning it off stops the agent's copy, so when that is this one a fresh copy is opened first to take over.
     @objc func toggleLogin(_ sender: NSMenuItem) {
