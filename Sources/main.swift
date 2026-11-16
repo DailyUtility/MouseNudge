@@ -518,10 +518,10 @@ func cutByLeave(_ t: Date, end: Bool) -> Bool {
     guard c.startOfDay(for: t) == t else { return false }
     return leave(on: dayKey.string(from: end ? t : dayBefore(t))) != nil
 }
-// Every task due after `from` up to `to` (whole minutes, at most a week back), with the minute it was due: what a
-// pause, sleep or a quit Mac missed.
+// Every task due after `from` up to `to` (whole minutes, from the start of that day at the earliest), with the minute it
+// was due: what a pause, sleep or a quit Mac missed.
 func dueBetween(after from: Date, upTo to: Date) -> [(at: Date, job: Job, text: String)] {
-    let c = Calendar.current, first = max(c.dateInterval(of: .minute, for: from)!.start, to - 7 * 86400) + 60
+    let c = Calendar.current, first = max(c.dateInterval(of: .minute, for: from)!.start + 60, c.startOfDay(for: to))
     // Only the minutes when a task can be due are checked: its time, its marks, or an edge of what it follows.
     var minutes = Set<Date>(), day = c.startOfDay(for: first)
     while day <= to {
@@ -537,17 +537,6 @@ func dueBetween(after from: Date, upTo to: Date) -> [(at: Date, job: Job, text: 
         day = c.date(byAdding: .day, value: 1, to: day)!
     }
     return minutes.filter { first <= $0 && $0 <= to }.sorted().flatMap { m in jobsDue(m).map { (m, $0.job, $0.text) } }
-}
-// Missed tasks as pop-up lines: each task once, with the time it was due (and the date if not today), or the first and
-// last time and how often when it came round several times.
-func missedLines(_ missed: [(at: Date, text: String)], now: Date) -> [String] {
-    var order: [String] = [], times: [String: [Date]] = [:]
-    for x in missed { if times[x.text] == nil { order.append(x.text) }; times[x.text, default: []].append(x.at) }
-    func when(_ d: Date) -> String { Calendar.current.isDate(d, inSameDayAs: now) ? hmFmt.string(from: d) : localFmt("MdHHmm").string(from: d) }
-    return order.map { t in
-        let ds = times[t]!
-        return ds.count == 1 ? when(ds[0]) + "  " + t : when(ds[0]) + "–" + when(ds.last!) + " ×\(ds.count)  " + t
-    }
 }
 
 // The nearest break start, named work period start or timed pop-up in the minutes after `d` (up to `within` seconds
@@ -719,7 +708,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     // The last run's time and result key, kept so the line can be retitled in another language.
     var lastRun: (time: String, result: String)?
     var paused = UserDefaults.standard.bool(forKey: "paused")
-    // Tasks due while paused, asleep or with the app quit, kept across restarts until they are shown together.
+    // Timed pop-ups due while paused, asleep or with the app quit, kept across restarts until they are listed together.
     var missed: [(at: Date, text: String)] = (UserDefaults.standard.stringArray(forKey: "missed") ?? []).compactMap { s in
         let p = s.split(separator: "\t", maxSplits: 1)
         return p.count == 2 ? Double(p[0]).map { (Date(timeIntervalSince1970: $0), String(p[1])) } : nil
@@ -936,15 +925,22 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     }
 
     func saveMissed() { UserDefaults.standard.set(missed.map { "\($0.at.timeIntervalSince1970)\t\($0.text)" }, forKey: "missed") }
-    // A missed pop-up by its text; any other task by what it does, marked as not run.
-    func missedText(_ j: Job, _ text: String) -> String { j.action == "notify" ? text : jobLabel(j) + T("common.paren", T("reminder.notRun")) }
+    // Of what was missed, only timed pop-ups wait to be listed: a start, an end or a pop-up every few minutes means nothing
+    // once its moment has gone. Shortcuts, links and commands are not run later, only logged.
+    func noteMissed(_ due: [(at: Date, job: Job, text: String)]) {
+        for x in due {
+            if x.job.action == "notify" { if x.job.when == "at" { missed.append((x.at, x.text)) } }
+            else { appendLog(T("log.taskMissed", jobLabel(x.job))) }
+        }
+        saveMissed()
+    }
     // Notes what came due in the minutes between the last one looked at and `now` (asleep, or the app quit), before
     // pruning drops one-off tasks whose time has passed.
     func catchUp(_ now: Date) {
         let m = Calendar.current.dateInterval(of: .minute, for: now)!.start
         if let l = lastSeen, m.timeIntervalSince(l) > 60 {
             let due = dueBetween(after: l, upTo: m - 60)
-            if !due.isEmpty { missed += due.map { ($0.at, missedText($0.job, $0.text)) }; saveMissed() }
+            if !due.isEmpty { noteMissed(due) }
         }
         lastSeen = m; UserDefaults.standard.set(m, forKey: "lastSeen")
     }
@@ -957,16 +953,17 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
             catchUp(now)
             // Paused, every task waits and is only listed on resume; all pop-ups due this minute share one window.
             let due = jobsDue(now)
-            if paused { missed += due.map { (now, missedText($0.job, $0.text)) }; saveMissed() }
+            if paused { noteMissed(due.map { (now, $0.job, $0.text) }) }
             else {
                 let pops = due.filter { $0.job.action == "notify" }.map(\.text)
                 if !pops.isEmpty { showReminder(pops); appendLog(T("log.reminderShown", pops.joined(separator: T("common.listSeparator")))) }
                 due.filter { $0.job.action != "notify" }.forEach { perform($0.job) }
             }
         }
+        // Only today's are listed; nothing is shown after days away.
         if !paused && !missed.isEmpty {
-            let lines = missedLines(missed, now: now)
-            showReminder(lines, title: T("reminder.missed")); appendLog(T("log.missedShown", lines.joined(separator: T("common.listSeparator"))))
+            let lines = missed.filter { Calendar.current.isDateInToday($0.at) }.map { hmFmt.string(from: $0.at) + "  " + $0.text }
+            if !lines.isEmpty { showReminder(lines, title: T("reminder.missed")); appendLog(T("log.missedShown", lines.joined(separator: T("common.listSeparator")))) }
             missed = []; saveMissed()
         }
         if hmFmt.string(from: now) != lastPrune { pruneExpired() }

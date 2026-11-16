@@ -267,10 +267,7 @@ jobs = [Job(action: "notify", text: "standup", when: "at", at: "10:00"), Job(act
 let slept = dueBetween(after: at("2026-11-13 09:30"), upTo: at("2026-11-13 12:00"))
 check("missed: every due minute", slept.map { show($0.at) }, ["2026-11-13 10:00", "2026-11-13 10:00", "2026-11-13 11:00", "2026-11-13 11:00", "2026-11-13 12:00"])
 check("missed: starts after the last minute seen", dueBetween(after: at("2026-11-13 10:00"), upTo: at("2026-11-13 10:30")).count, 0)
-check("missed: lines", missedLines(slept.map { ($0.at, $0.text) }, now: at("2026-11-13 12:01")),
-      ["10:00  standup", "10:00–12:00 ×3  water", "11:00  https://example.com"])
-check("missed: another day shows the date", missedLines([(at("2026-11-13 10:00"), "x")], now: at("2026-11-16 09:00")).first?.hasSuffix("  x"), true)
-check("missed: at most a week back", dueBetween(after: at("2026-10-01 00:00"), upTo: at("2026-11-13 12:00")).first.map { $0.at >= at("2026-11-06 12:00") }, true)
+check("missed: only from the start of the day", dueBetween(after: at("2026-11-12 09:00"), upTo: at("2026-11-13 12:00")).map { show($0.at).prefix(10) }.allSatisfy { $0 == "2026-11-13" }, true)
 jobs = []
 
 // How far through work, for the menu bar icon

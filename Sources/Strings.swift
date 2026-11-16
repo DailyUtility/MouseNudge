@@ -263,8 +263,8 @@ let translations: [String: [String: String]] = [
         "job.notifyText": "弹窗「%@」",
         "job.workPeriods": "工作中时段",
         "reminder.missed": "暂停或睡眠时错过的提醒",
-        "reminder.notRun": "未运行",
         "log.missedShown": "补弹错过的提醒：%@",
+        "log.taskMissed": "暂停或睡眠时错过，未运行：%@",
     ],
     "en": [
         "week.first": "1st",
@@ -529,8 +529,8 @@ let translations: [String: [String: String]] = [
         "job.notifyText": "Pop-up “%@”",
         "job.workPeriods": "working periods",
         "reminder.missed": "Missed while paused or asleep",
-        "reminder.notRun": "not run",
         "log.missedShown": "Missed reminders shown: %@",
+        "log.taskMissed": "Missed while paused or asleep, not run: %@",
     ],
     "zh-Hant": [
         "week.first": "第一個",
@@ -795,8 +795,8 @@ let translations: [String: [String: String]] = [
         "job.notifyText": "彈窗「%@」",
         "job.workPeriods": "工作中時段",
         "reminder.missed": "暫停或睡眠時錯過的提醒",
-        "reminder.notRun": "未執行",
         "log.missedShown": "補彈錯過的提醒：%@",
+        "log.taskMissed": "暫停或睡眠時錯過，未執行：%@",
     ],
     "ja": [
         "week.first": "第1",
@@ -1061,8 +1061,8 @@ let translations: [String: [String: String]] = [
         "job.notifyText": "ポップアップ「%@」",
         "job.workPeriods": "作業中の時間帯",
         "reminder.missed": "一時停止中・スリープ中に逃したもの",
-        "reminder.notRun": "未実行",
         "log.missedShown": "逃した通知を表示：%@",
+        "log.taskMissed": "一時停止中・スリープ中のため未実行：%@",
     ],
     "ko": [
         "week.first": "첫째",
@@ -1327,8 +1327,8 @@ let translations: [String: [String: String]] = [
         "job.notifyText": "팝업 “%@”",
         "job.workPeriods": "작업 중 시간대",
         "reminder.missed": "일시 정지·잠자기 중 놓친 알림",
-        "reminder.notRun": "실행 안 됨",
         "log.missedShown": "놓친 알림 표시: %@",
+        "log.taskMissed": "일시 정지·잠자기 중이라 실행 안 됨: %@",
     ],
     "ms": [
         "week.first": "pertama",
@@ -1593,8 +1593,8 @@ let translations: [String: [String: String]] = [
         "job.notifyText": "Pop-timbul “%@”",
         "job.workPeriods": "tempoh bekerja",
         "reminder.missed": "Terlepas semasa dijeda atau tidur",
-        "reminder.notRun": "tidak dijalankan",
         "log.missedShown": "Peringatan terlepas ditunjukkan: %@",
+        "log.taskMissed": "Terlepas semasa dijeda atau tidur, tidak dijalankan: %@",
     ],
     "es": [
         "week.first": "primer",
@@ -1859,8 +1859,8 @@ let translations: [String: [String: String]] = [
         "job.notifyText": "Aviso «%@»",
         "job.workPeriods": "periodos de trabajo",
         "reminder.missed": "Perdido en pausa o en reposo",
-        "reminder.notRun": "no ejecutada",
         "log.missedShown": "Avisos perdidos mostrados: %@",
+        "log.taskMissed": "Perdida en pausa o en reposo, no ejecutada: %@",
     ],
     "fr": [
         "week.first": "1er",
@@ -2125,8 +2125,8 @@ let translations: [String: [String: String]] = [
         "job.notifyText": "Fenêtre « %@ »",
         "job.workPeriods": "périodes de travail",
         "reminder.missed": "Manqué pendant la pause ou la veille",
-        "reminder.notRun": "non exécutée",
         "log.missedShown": "Rappels manqués affichés : %@",
+        "log.taskMissed": "Manquée pendant la pause ou la veille, non exécutée : %@",
     ],
     "de": [
         "week.first": "1.",
@@ -2391,8 +2391,8 @@ let translations: [String: [String: String]] = [
         "job.notifyText": "Pop-up „%@“",
         "job.workPeriods": "Arbeitszeiträume",
         "reminder.missed": "Verpasst während Pause oder Ruhezustand",
-        "reminder.notRun": "nicht ausgeführt",
         "log.missedShown": "Verpasste Erinnerungen gezeigt: %@",
+        "log.taskMissed": "Während Pause oder Ruhezustand verpasst, nicht ausgeführt: %@",
     ],
 ]
 // Template order.
@@ -2659,6 +2659,6 @@ let translationKeys: [String] = [
     "job.notifyText",
     "job.workPeriods",
     "reminder.missed",
-    "reminder.notRun",
     "log.missedShown",
+    "log.taskMissed",
 ]
