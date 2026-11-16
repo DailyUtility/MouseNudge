@@ -72,7 +72,7 @@ Shiftbell 是一个 macOS 菜单栏小工具，围绕上班时间运行定时任
 
 ## 安装
 
-1. 从 [Releases](https://github.com/DailyUtility/MouseNudge/releases) 下载 `Shiftbell-<版本号>.dmg`，把 Shiftbell 拖进"应用程序"。
+1. 从 [Releases](https://github.com/DailyUtility/Shiftbell/releases) 下载 `Shiftbell-<版本号>.dmg`，把 Shiftbell 拖进"应用程序"。
 2. 这个 App 没有经过 Apple 公证，第一次打开时会提示"无法验证开发者"。可以用下面任一种方法打开：
    - 在"应用程序"里右键点 Shiftbell，选"打开"，再点一次"打开"。
    - 先双击打开一次，然后到"系统设置 → 隐私与安全性"，点"仍要打开"。
@@ -84,8 +84,8 @@ Shiftbell 是一个 macOS 菜单栏小工具，围绕上班时间运行定时任
 先安装 Xcode 命令行工具（`xcode-select --install`），然后：
 
 ```sh
-git clone https://github.com/DailyUtility/MouseNudge.git
-cd MouseNudge
+git clone https://github.com/DailyUtility/Shiftbell.git
+cd Shiftbell
 ./build.sh --install      # 构建 build/Shiftbell.app，复制到"应用程序"并启动
 ```
 
@@ -96,7 +96,7 @@ cd MouseNudge
 | `./make-dmg.sh` | 构建 `build/Shiftbell-<版本号>.dmg`（Apple 芯片 + Intel），版本号取自 `Resources/Info.plist` |
 | `./tests/run.sh` | 运行排程测试 |
 
-默认构建使用临时签名（ad hoc），所以每次重新构建后都要重新授权辅助功能。如果不想每次重新授权，可以在"钥匙串访问"里创建一个名为 `Shiftbell Local Signing`（旧名 `MouseNudge Local Signing` 也可以）的自签名代码签名证书，`build.sh` 找到它就会自动使用。设置 `SIGN_IDENTITY` 可以换用其他证书。
+默认构建使用临时签名（ad hoc），所以每次重新构建后都要重新授权辅助功能。如果不想每次重新授权，可以在"钥匙串访问"里创建一个名为 `Shiftbell Local Signing`的自签名代码签名证书，`build.sh` 找到它就会自动使用。设置 `SIGN_IDENTITY` 可以换用其他证书。
 
 ### 发布
 

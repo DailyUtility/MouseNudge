@@ -6,20 +6,6 @@ import ServiceManagement
 import Network
 import UniformTypeIdentifiers
 
-// Shiftbell was called MouseNudge: its settings and data folder move over once, before anything reads them.
-// Tests run without a bundle and skip this.
-let oldBundleID = "io.github.mar-er.mousenudge"
-let movedFromMouseNudge: Void = {
-    guard Bundle.main.bundleIdentifier == "io.github.mar-er.shiftbell" else { return }
-    let d = UserDefaults.standard
-    if !d.bool(forKey: "movedFromMouseNudge") {
-        for (k, v) in d.persistentDomain(forName: oldBundleID) ?? [:] where d.object(forKey: k) == nil { d.set(v, forKey: k) }
-        d.set(true, forKey: "movedFromMouseNudge")
-    }
-    let base = NSHomeDirectory() + "/Library/Application Support/", fm = FileManager.default
-    if fm.fileExists(atPath: base + "mouse-nudge") && !fm.fileExists(atPath: base + "shiftbell") { try? fm.moveItem(atPath: base + "mouse-nudge", toPath: base + "shiftbell") }
-}()
-
 let skipIfIdleUnder: Double = 60
 // Minutes between nudges, from the nudge task (applyNudge).
 var intervalMinutes = 10
@@ -1959,21 +1945,13 @@ func disableLoginAgent() throws {
     launchctl("bootout", "gui/\(getuid())/\(loginAgentLabel)")
 }
 // Only one copy runs, and while open at login is on it is the launch agent's. Copies opened from Finder hand over to the
-// agent; the agent's copy closes any other. Earlier versions used a login item or an SMAppService agent; both move over.
+// agent; the agent's copy closes any other. Earlier versions used a login item, which moves over.
 func claimSingleInstance() {
     let others = NSRunningApplication.runningApplications(withBundleIdentifier: Bundle.main.bundleIdentifier ?? "")
         .filter { $0.processIdentifier != getpid() }
     if CommandLine.arguments.contains(takeoverArgument) { return }
     if underLoginAgent { others.forEach { $0.terminate() }; return }
-    // MouseNudge, the old name: close it, and move its open-at-login agent over to this copy.
-    NSRunningApplication.runningApplications(withBundleIdentifier: oldBundleID).forEach { $0.terminate() }
-    let oldAgent = URL(fileURLWithPath: NSHomeDirectory() + "/Library/LaunchAgents/\(oldBundleID).keepalive.plist")
-    if FileManager.default.fileExists(atPath: oldAgent.path) {
-        try? FileManager.default.removeItem(at: oldAgent); launchctl("bootout", "gui/\(getuid())/\(oldBundleID).keepalive")
-        if !loginAgentOn { try? enableLoginAgent() }
-    }
-    let legacy = SMAppService.agent(plistName: "io.github.mar-er.mousenudge.agent.plist")
-    for old in [SMAppService.mainApp, legacy] where old.status == .enabled { try? old.unregister(); if !loginAgentOn { try? enableLoginAgent() } }
+    if SMAppService.mainApp.status == .enabled { try? SMAppService.mainApp.unregister(); if !loginAgentOn { try? enableLoginAgent() } }
     if loginAgentOn {
         // Not loaded yet (turned on in an older session): load it, otherwise just make sure its copy is running.
         if launchctl("kickstart", "gui/\(getuid())/\(loginAgentLabel)") != 0 { launchctl("bootstrap", "gui/\(getuid())", loginAgentURL.path) }
