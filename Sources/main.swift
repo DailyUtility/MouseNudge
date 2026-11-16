@@ -723,7 +723,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
             NSApp.activate(ignoringOtherApps: true)
             let a = NSAlert(); a.alertStyle = .warning; a.messageText = T("language.problemTitle")
             a.informativeText = fresh.joined(separator: "\n") + "\n\n" + T("language.problemHelp")
-            a.addButton(withTitle: T("language.openFolder")); a.addButton(withTitle: T("common.ok"))
+            a.addButton(withTitle: T("language.openFolder")); a.addButton(withTitle: T("common.ok")).keyEquivalent = "\u{1b}"
             if a.runModal() == .alertFirstButtonReturn { self?.openLanguagesFolder() }
         }
     }
@@ -1052,7 +1052,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         let p = NSDatePicker(); p.datePickerStyle = .textFieldAndStepper; p.datePickerElements = .yearMonthDay
         p.presentsCalendarOverlay = true; p.locale = appLocale; p.dateValue = Date(); p.sizeToFit(); return p
     }
-    // Shows a form; returns false on cancel. `check` returns an error message to keep the form open, or nil to accept.
+    // Shows a form; returns false on cancel. Cancel buttons here and in the other dialogs take Esc themselves: NSAlert only
+    // does that for a button titled "Cancel" in English. `check` returns an error message to keep the form open, or nil to accept.
     func form(_ title: String, _ info: String, _ rows: [(String, NSView)], button: String? = nil, check: () -> String?) -> Bool {
         NSApp.activate(ignoringOtherApps: true)
         // Pickers and pop-ups all take the date picker's width; text fields keep their own.
@@ -1067,7 +1068,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         for (i, r) in rows.enumerated() where r.1 is NSStackView { grid.row(at: i).yPlacement = .top; grid.row(at: i).rowAlignment = .firstBaseline }
         let a = NSAlert(); a.messageText = title; a.informativeText = info
         openForm = a
-        a.accessoryView = grid; a.addButton(withTitle: button ?? T("common.add")); a.addButton(withTitle: T("common.cancel"))
+        a.accessoryView = grid; a.addButton(withTitle: button ?? T("common.add")); a.addButton(withTitle: T("common.cancel")).keyEquivalent = "\u{1b}"
         a.window.initialFirstResponder = rows.first?.1
         while a.runModal() == .alertFirstButtonReturn {
             guard let err = check() else { return true }
@@ -1093,7 +1094,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     func confirmRemove(_ question: String, _ text: String, ok: String = T("common.delete"), keep: String = T("common.cancel")) -> Bool {
         NSApp.activate(ignoringOtherApps: true)
         let a = NSAlert(); a.messageText = question; a.informativeText = text
-        a.addButton(withTitle: ok); a.addButton(withTitle: keep)
+        a.addButton(withTitle: ok); a.addButton(withTitle: keep).keyEquivalent = "\u{1b}"
         return a.runModal() == .alertFirstButtonReturn
     }
     func pair(_ a: NSView, _ b: NSView) -> NSStackView { let s = NSStackView(views: [a, b]); s.spacing = 6; return s }
@@ -1434,7 +1435,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         NSApp.activate(ignoringOtherApps: true)
         let field = NSTextField(string: String(intervalMinutes)); field.frame.size.width = 120
         let a = NSAlert(); a.messageText = T("interval.title"); a.informativeText = T("interval.help")
-        a.accessoryView = field; a.addButton(withTitle: T("common.save")); a.addButton(withTitle: T("common.cancel"))
+        a.accessoryView = field; a.addButton(withTitle: T("common.save")); a.addButton(withTitle: T("common.cancel")).keyEquivalent = "\u{1b}"
         a.window.initialFirstResponder = field
         while a.runModal() == .alertFirstButtonReturn {
             guard let v = Int(field.stringValue.trimmingCharacters(in: .whitespaces)), (1...240).contains(v) else {
@@ -1490,7 +1491,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         let field = NSTextField(string: initial); field.frame.size.width = 380; field.placeholderString = "https://example.com/holidays.ics"
         let a = NSAlert(); a.messageText = T("menu.subscribeHoliday")
         a.informativeText = T("holiday.subscribeHelp")
-        a.accessoryView = field; a.addButton(withTitle: T("holiday.saveAndFetch")); a.addButton(withTitle: T("common.cancel"))
+        a.accessoryView = field; a.addButton(withTitle: T("holiday.saveAndFetch")); a.addButton(withTitle: T("common.cancel")).keyEquivalent = "\u{1b}"
         a.window.initialFirstResponder = field
         guard a.runModal() == .alertFirstButtonReturn, !fetching else { return }
         let source = field.stringValue.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -1517,7 +1518,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         let a = NSAlert(); a.alertStyle = .warning; a.messageText = f.title
         a.informativeText = f.advice + (link != nil && !holidaySource.isEmpty && link != holidaySource ? " " + T("holiday.keptPrevious") : "")
         guard let link else { a.runModal(); return }
-        a.addButton(withTitle: T("holiday.editLink")); a.addButton(withTitle: T("common.cancel"))
+        a.addButton(withTitle: T("holiday.editLink")); a.addButton(withTitle: T("common.cancel")).keyEquivalent = "\u{1b}"
         if a.runModal() == .alertFirstButtonReturn { askHolidaySource(link) }
     }
     @objc func refetchHolidays() { checkHolidays(force: true, report: true) }
