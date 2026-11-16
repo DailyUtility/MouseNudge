@@ -1326,7 +1326,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     func rebuildPeriodMenu() {
         // Repeating ones first, then one-offs by date; finished one-offs are removed by pruneExpired.
         periods.sort { (onceDay($0.rule) ?? "", $0.from) < (onceDay($1.rule) ?? "", $1.from) }
-        fill(periodRoot, periods.map { (periodLabel($0), $0.disabled == true) }, toggle: { [unowned self] i in
+        // Each row says whether the nudge pauses in it, which is set on the nudge task.
+        let quiet = Set(nudgeJob?.skip ?? [])
+        fill(periodRoot, periods.map { (periodLabel($0) + (quiet.contains($0.id) ? T("common.paren", T("period.nudgePaused")) : ""), $0.disabled == true) }, toggle: { [unowned self] i in
             defer { saveJSON(periods, to: periodsURL); replan(); checkApps() }; return flip(&periods[i].disabled, periodLabel(periods[i]))
         }, edit: { [unowned self] in editPeriod(periods[$0]) }, remove: removePeriod, add: (T("menu.addPeriod"), #selector(addPeriod), "b"))
     }
@@ -1398,7 +1400,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         saveJSON(periods, to: periodsURL); rebuildPeriodMenu()
         // A new period is offered to the nudge, which is where pausing in it is set.
         if old == nil, nudging, let i = jobs.firstIndex(where: { $0.action == "nudge" }),
-           confirmRemove(T("period.askSkip"), periodLabel(p), ok: T("period.skipNudge"), keep: T("period.keepNudging")) {
+           confirmRemove(T("period.askSkip"), periodLabel(p) + "\n\n" + T("period.askSkipHint"), ok: T("period.skipNudge"), keep: T("period.keepNudging")) {
             let before = jobLabel(jobs[i]); jobs[i].skip = (jobs[i].skip ?? []) + [p.id]
             saveJSON(jobs, to: jobsURL); appendLog(T("log.itemEdited", before, jobLabel(jobs[i])))
         }
@@ -1475,6 +1477,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
             defer { saveJSON(jobs, to: jobsURL); jobsChanged() }; return flip(&jobs[i].disabled, jobLabel(jobs[i]))
         }, edit: { [unowned self] in editJob(jobs[$0]) }, remove: removeJob, add: (T("menu.addTask"), #selector(addJob), ""),
            test: { [unowned self] in testJob(jobs[$0]) })
+        rebuildPeriodMenu()
     }
     // Runs a task once now, whatever its time, turned off or paused, so its setup can be checked: the pop-up shows the text
     // it would show (at its start, for one told at both edges), the nudge moves the cursor, an app is opened.
