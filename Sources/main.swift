@@ -1576,8 +1576,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         quit.state = old?.keepOpen == true ? .off : .on; locked.state = nudgeWhenLocked ? .on : .off
         let rep = repeatRows(defaultIndex: 0, editing: old.map { ($0.rule, nil) }), t = timePicker(old?.at ?? "10:00")
         let anyDay = NSButton(checkboxWithTitle: T("job.anyDay"), target: nil, action: nil); anyDay.state = old?.anyDay == true ? .on : .off
-        // Any number of times can be followed. A turned-off or deleted period stays on the list while the task follows it.
-        let pickedFollow = old.map(follows) ?? ["work", "overtime"]
+        // Any number of times can be followed, none ticked for a new task. A turned-off or deleted period stays on the list
+        // while the task follows it.
+        let pickedFollow = old.map(follows) ?? []
         let shown = periods.filter { $0.disabled != true || pickedFollow.contains($0.id) }
         let lunch = lunchInWork() != nil || pickedFollow.contains("lunch") ? ["lunch"] : []
         var choices: [String] = ["work"] + lunch + ["overtime"] + shown.map(\.id)
