@@ -117,6 +117,25 @@ check("remind: end turned off", remindersDue(at("2026-11-13 19:00")).count, 0)
 reminders = []
 reset(start: "09:00", end: "18:00")
 
+// Period reminders follow the period as it is now
+periods = [Period(id: "lunch", from: "12:00", to: "13:00", note: "lunch", rule: nil)]
+reminders = [periodReminder(periods[0], end: false), periodReminder(periods[0], end: true)]
+check("period remind: start", remindersDue(at("2026-11-13 12:00")), [T("reminder.periodStart", "lunch")])
+check("period remind: end", remindersDue(at("2026-11-13 13:00")), [T("reminder.periodEnd", "lunch")])
+check("period remind: not on Saturday", remindersDue(at("2026-11-14 12:00")).count, 0)
+periods[0].from = "11:30"; periods[0].to = "12:30"; periods[0].note = "food"
+check("period remind: start moves", remindersDue(at("2026-11-13 11:30")), [T("reminder.periodStart", "food")])
+check("period remind: old start silent", remindersDue(at("2026-11-13 12:00")).count, 0)
+check("period remind: end moves", remindersDue(at("2026-11-13 12:30")).count, 1)
+periods[0].disabled = true
+check("period remind: period off", remindersDue(at("2026-11-13 11:30")).count, 0)
+periods = [Period(id: "late", from: "23:00", to: "01:00", note: "", rule: "once:2026-11-14")]
+reminders = [periodReminder(periods[0], end: true)]
+check("period remind: overnight one-off ends next day", remindersDue(at("2026-11-15 01:00")).count, 1)
+periods = []
+check("period remind: period gone", remindersDue(at("2026-11-15 01:00")).count, 0)
+reminders = []
+
 // Menu bar: the countdown before a break or reminder
 periods = [Period(from: "12:00", to: "13:00", note: "lunch", rule: nil)]
 reminders = [Reminder(at: "14:00", note: "meeting", rule: nil)]

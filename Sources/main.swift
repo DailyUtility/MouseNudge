@@ -389,24 +389,38 @@ func appWanted(_ a: WatchedApp, _ d: Date) -> Bool { a.disabled != true && cover
 
 // Reminders: a pop-up at `at` (HH:mm) on the days `rule` picks (same rules as periods). Repeating ones ring only on
 // working days; a one-off rings on its date whatever the day. The work start / end reminders (`work` "start" or "end")
-// are listed like the others, are there by default, and follow the work hours.
+// are listed like the others, are there by default, and follow the work hours. A period's start or end reminder
+// (`period` its id, `end` for the end) follows that period: its time, repeat and name, and rings only while it is on.
 let remindersURL = URL(fileURLWithPath: dir + "/reminders.json")
-struct Reminder: Codable, Equatable { var at: String; var note: String; var rule: String?; var disabled: Bool? = nil; var work: String? = nil }
+struct Reminder: Codable, Equatable { var at: String; var note: String; var rule: String?; var disabled: Bool? = nil; var work: String? = nil
+    var period: String? = nil; var end: Bool? = nil }
 var reminders: [Reminder] = []
 func workReminder(_ kind: String) -> Reminder { Reminder(at: kind == "start" ? workStart : workEnd, note: "", rule: nil, work: kind) }
-// Keeps the work start / end reminders on the current work hours.
-func syncWorkReminders() {
-    for i in reminders.indices { if let k = reminders[i].work { reminders[i].at = k == "start" ? workStart : workEnd } }
+func periodReminder(_ p: Period, end: Bool) -> Reminder { current(Reminder(at: "", note: "", rule: nil, period: p.id, end: end ? true : nil)) }
+func periodName(_ p: Period) -> String { p.note.isEmpty ? T(p.work == true ? "period.work" : "period.rest") : p.note }
+// The reminder with the time and repeat of what it follows as they are now. A one-off period running past midnight
+// ends on the next day.
+func current(_ r: Reminder) -> Reminder {
+    var r = r
+    if let k = r.work { r.at = k == "start" ? workStart : workEnd }
+    if let id = r.period, let p = periods.first(where: { $0.id == id }) {
+        r.at = r.end == true ? p.to : p.from; r.rule = p.rule
+        if r.end == true && overnight(p.from, p.to), let d = onceDay(p.rule).flatMap({ dayKey.date(from: $0) }) { r.rule = "once:" + dayKey.string(from: d + 86400) }
+    }
+    return r
 }
+// Keeps the work and period reminders on the current work hours and periods.
+func syncWorkReminders() { reminders = reminders.map(current) }
 func reminderText(_ r: Reminder) -> String {
     if let k = r.work { return T(k == "start" ? "reminder.workStart" : "reminder.workEnd") }
+    if let id = r.period, let p = periods.first(where: { $0.id == id }) { return T(r.end == true ? "reminder.periodEnd" : "reminder.periodStart", periodName(p)) }
     return r.note.isEmpty ? T("reminder.untitled", r.at) : r.note
 }
 // The texts to show at this minute. An overnight shift's end belongs to the working day it started on.
 func remindersDue(_ d: Date) -> [String] {
     let hm = hmFmt.string(from: d)
     var due: [String] = []
-    for r in reminders where r.disabled != true {
+    for r in reminders.map(current) where r.disabled != true && (r.period == nil || periods.contains { $0.id == r.period && $0.disabled != true }) {
         switch r.work {
         case "start": if hm == workStart && isWorkday(d) { due.append(reminderText(r)) }
         case "end": if hm == workEnd && isWorkday(overnight(workStart, workEnd) ? dayBefore(d) : d) { due.append(reminderText(r)) }
@@ -786,7 +800,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         if !o.isEmpty { overtimes.removeAll(where: otOver); saveJSON(overtimes, to: overtimeURL); rebuildOvertimeMenu(); o.forEach { appendLog(T("log.overtimeExpired", otLabel($0))) } }
         if !b.isEmpty {
             periods.removeAll { over(onceDay($0.rule), $0.from, $0.to) }; saveJSON(periods, to: periodsURL); rebuildPeriodMenu()
-            b.forEach { appendLog(T("log.periodExpired", periodLabel($0))); dropApps(following: $0) }
+            b.forEach { appendLog(T("log.periodExpired", periodLabel($0))); dropFollowers(of: $0) }
         }
         // A one-off reminder goes once its minute has passed (tick shows it before pruning).
         let r = reminders.filter { over(onceDay($0.rule), nil, $0.at) }
@@ -1213,19 +1227,22 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
                        rule: rep.rule(), work: kind.indexOfSelectedItem == 1 ? true : nil)
         if let o = old { p.id = o.id; p.disabled = o.disabled }
         put(p, over: old, in: &periods, label: periodLabel, added: "log.periodAdded")
-        saveJSON(periods, to: periodsURL); rebuildPeriodMenu(); rebuildAppsMenu(); replan(); checkApps()
+        saveJSON(periods, to: periodsURL); rebuildPeriodMenu(); rebuildAppsMenu(); rebuildReminderMenu(); saveJSON(reminders, to: remindersURL)
+        replan(); checkApps()
     }
-    // Apps following a period go with it.
+    // Apps and reminders following a period go with it.
     func removePeriod(_ i: Int) {
         guard periods.indices.contains(i) else { return }
         let p = periods[i], bound = watchedApps.filter { $0.follows == p.id }.map(\.name)
-        guard confirmRemove(T("confirm.deletePeriod"), periodLabel(p) + (bound.isEmpty ? "" : "\n\n" + T("period.deleteApps", bound.joined(separator: T("common.listSeparator"))))) else { return }
+        let rings = reminders.filter { $0.period == p.id }.map(reminderText)
+        func list(_ key: String, _ names: [String]) -> String { names.isEmpty ? "" : "\n\n" + T(key, names.joined(separator: T("common.listSeparator"))) }
+        guard confirmRemove(T("confirm.deletePeriod"), periodLabel(p) + list("period.deleteApps", bound) + list("period.deleteReminders", rings)) else { return }
         periods.remove(at: i); saveJSON(periods, to: periodsURL); rebuildPeriodMenu()
-        appendLog(T("log.periodDeleted", periodLabel(p))); dropApps(following: p)
+        appendLog(T("log.periodDeleted", periodLabel(p))); dropFollowers(of: p)
         next = nextSlot(after: Date()); tick()
     }
 
-    func reminderLabel(_ r: Reminder) -> String { "\(ruleLabel(r.rule)) \(r.at)" + (r.work != nil ? "  " + reminderText(r) : r.note.isEmpty ? "" : "  " + r.note) }
+    func reminderLabel(_ r: Reminder) -> String { "\(ruleLabel(r.rule)) \(r.at)" + (r.work != nil || r.period != nil ? "  " + reminderText(r) : r.note.isEmpty ? "" : "  " + r.note) }
     func rebuildReminderMenu() {
         // Repeating ones first, then one-offs by date; finished one-offs are removed by pruneExpired.
         syncWorkReminders()
@@ -1238,17 +1255,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         let rep = repeatRows(defaultIndex: 1), t = timePicker("10:00"), note = noteField()
         note.placeholderString = T("reminder.notePlaceholder")
         // Several at once from existing times: work start and end (which follow the work hours), and each period's start
-        // and end as two choices with its repeat, copied so a later change to the period does not move them. "Custom" adds
-        // the one in the fields below.
+        // and end as two choices (which follow the period). "Custom" adds the one in the fields below.
         var presets: [Reminder] = [workReminder("start"), workReminder("end")]
         var titles = [T("reminder.presetWorkStart", workStart), T("reminder.presetWorkEnd", workEnd)]
         for p in periods where p.disabled != true {
-            let name = p.note.isEmpty ? T(p.work == true ? "period.work" : "period.rest") : p.note
-            // A one-off running past midnight ends on the next day.
-            var endRule = p.rule
-            if overnight(p.from, p.to), let d = onceDay(p.rule).flatMap({ dayKey.date(from: $0) }) { endRule = "once:" + dayKey.string(from: d + 86400) }
-            presets += [Reminder(at: p.from, note: T("reminder.periodStart", name), rule: p.rule), Reminder(at: p.to, note: T("reminder.periodEnd", name), rule: endRule)]
-            titles += [T("reminder.presetPeriodStart", name, ruleLabel(p.rule), p.from), T("reminder.presetPeriodEnd", name, ruleLabel(p.rule), p.to)]
+            presets += [periodReminder(p, end: false), periodReminder(p, end: true)]
+            titles += [T("reminder.presetPeriodStart", periodName(p), ruleLabel(p.rule), p.from), T("reminder.presetPeriodEnd", periodName(p), ruleLabel(p.rule), p.to)]
         }
         let boxes = titles.map { NSButton(checkboxWithTitle: $0, target: nil, action: nil) }
         let list = NSStackView(views: boxes); list.orientation = .vertical; list.alignment = .leading; list.spacing = 4
@@ -1269,16 +1281,18 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         if isCustom { added.append(Reminder(at: hmFmt.string(from: t.dateValue), note: note.stringValue.trimmingCharacters(in: .whitespaces), rule: rep.rule())) }
         // One already there (same time, repeat and text) is not added twice; if it was turned off, picking it turns it back on.
         added = added.filter { r in
-            guard let i = reminders.firstIndex(where: { r.work != nil ? $0.work == r.work : $0.work == nil && $0.at == r.at && $0.rule == r.rule && $0.note == r.note }) else { return true }
+            guard let i = reminders.firstIndex(where: { r.work != nil ? $0.work == r.work : r.period != nil ? $0.period == r.period && $0.end == r.end
+                : $0.work == nil && $0.period == nil && $0.at == r.at && $0.rule == r.rule && $0.note == r.note }) else { return true }
             if reminders[i].disabled == true { reminders[i].disabled = nil; appendLog(T("log.reminderAdded", reminderLabel(reminders[i]))) }
             return false
         }
         reminders += added; saveJSON(reminders, to: remindersURL); rebuildReminderMenu()
         added.forEach { appendLog(T("log.reminderAdded", reminderLabel($0))) }
     }
-    // Start and end of work reminders follow the work hours, so editing one changes those.
+    // Work and period reminders follow the work hours or the period, so editing one changes those.
     func editReminder(_ old: Reminder) {
         guard old.work == nil else { return setWorkHours() }
+        if let p = periods.first(where: { $0.id == old.period }) { return editPeriod(p) }
         let rep = repeatRows(defaultIndex: 1, editing: (old.rule, nil)), t = timePicker(old.at), note = noteField()
         defer { withExtendedLifetime(rep.sync) {} }
         note.placeholderString = T("reminder.notePlaceholder"); note.stringValue = old.note
@@ -1377,11 +1391,16 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         let a = watchedApps.remove(at: i); saveJSON(watchedApps, to: appsURL); rebuildAppsMenu()
         appendLog(T("log.appDeleted", appLabel(a)))
     }
-    func dropApps(following p: Period) {
-        let gone = watchedApps.filter { $0.follows == p.id }
-        guard !gone.isEmpty else { return }
-        watchedApps.removeAll { $0.follows == p.id }; saveJSON(watchedApps, to: appsURL); rebuildAppsMenu()
-        gone.forEach { appendLog(T("log.appDeleted", $0.name)) }
+    func dropFollowers(of p: Period) {
+        let gone = watchedApps.filter { $0.follows == p.id }, rings = reminders.filter { $0.period == p.id }
+        if !gone.isEmpty {
+            watchedApps.removeAll { $0.follows == p.id }; saveJSON(watchedApps, to: appsURL); rebuildAppsMenu()
+            gone.forEach { appendLog(T("log.appDeleted", $0.name)) }
+        }
+        if !rings.isEmpty {
+            rings.forEach { appendLog(T("log.reminderDeleted", reminderLabel($0))) }
+            reminders.removeAll { $0.period == p.id }; saveJSON(reminders, to: remindersURL); rebuildReminderMenu()
+        }
     }
     // Opens any watched app that isn't running while it is wanted (a failed launch is retried after a minute), and
     // quits it once when its time ends; an app opened by hand outside its time is left alone. Entries for the same app

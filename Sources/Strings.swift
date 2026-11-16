@@ -238,6 +238,7 @@ let translations: [String: [String: String]] = [
         "reminder.periodEnd": "%@ 结束",
         "reminder.presetPeriodStart": "%1$@ 开始  %2$@ %3$@",
         "reminder.presetPeriodEnd": "%1$@ 结束  %2$@ %3$@",
+        "period.deleteReminders": "跟随这个时段的提醒也会一起删除：%@",
     ],
     "en": [
         "week.first": "1st",
@@ -477,6 +478,7 @@ let translations: [String: [String: String]] = [
         "reminder.periodEnd": "%@ ends",
         "reminder.presetPeriodStart": "%1$@ starts  %2$@ %3$@",
         "reminder.presetPeriodEnd": "%1$@ ends  %2$@ %3$@",
+        "period.deleteReminders": "Reminders that follow it are removed too: %@",
     ],
     "zh-Hant": [
         "week.first": "第一個",
@@ -716,6 +718,7 @@ let translations: [String: [String: String]] = [
         "reminder.periodEnd": "%@ 結束",
         "reminder.presetPeriodStart": "%1$@ 開始  %2$@ %3$@",
         "reminder.presetPeriodEnd": "%1$@ 結束  %2$@ %3$@",
+        "period.deleteReminders": "跟隨這個時段的提醒也會一起刪除：%@",
     ],
     "ja": [
         "week.first": "第1",
@@ -955,6 +958,7 @@ let translations: [String: [String: String]] = [
         "reminder.periodEnd": "%@ 終了",
         "reminder.presetPeriodStart": "%1$@ 開始  %2$@ %3$@",
         "reminder.presetPeriodEnd": "%1$@ 終了  %2$@ %3$@",
+        "period.deleteReminders": "この時間帯に連動するリマインダーも削除されます：%@",
     ],
     "ko": [
         "week.first": "첫째",
@@ -1194,6 +1198,7 @@ let translations: [String: [String: String]] = [
         "reminder.periodEnd": "%@ 종료",
         "reminder.presetPeriodStart": "%1$@ 시작  %2$@ %3$@",
         "reminder.presetPeriodEnd": "%1$@ 종료  %2$@ %3$@",
+        "period.deleteReminders": "이 시간대를 따르는 알림도 함께 삭제됩니다: %@",
     ],
     "ms": [
         "week.first": "pertama",
@@ -1433,6 +1438,7 @@ let translations: [String: [String: String]] = [
         "reminder.periodEnd": "%@ tamat",
         "reminder.presetPeriodStart": "%1$@ bermula  %2$@ %3$@",
         "reminder.presetPeriodEnd": "%1$@ tamat  %2$@ %3$@",
+        "period.deleteReminders": "Peringatan yang mengikutinya turut dipadam: %@",
     ],
     "es": [
         "week.first": "primer",
@@ -1672,6 +1678,7 @@ let translations: [String: [String: String]] = [
         "reminder.periodEnd": "Termina: %@",
         "reminder.presetPeriodStart": "Empieza %1$@  %2$@ %3$@",
         "reminder.presetPeriodEnd": "Termina %1$@  %2$@ %3$@",
+        "period.deleteReminders": "También se quitarán los recordatorios que la siguen: %@",
     ],
     "fr": [
         "week.first": "1er",
@@ -1911,6 +1918,7 @@ let translations: [String: [String: String]] = [
         "reminder.periodEnd": "Fin : %@",
         "reminder.presetPeriodStart": "Début %1$@  %2$@ %3$@",
         "reminder.presetPeriodEnd": "Fin %1$@  %2$@ %3$@",
+        "period.deleteReminders": "Les rappels qui le suivent seront aussi retirés : %@",
     ],
     "de": [
         "week.first": "1.",
@@ -2150,6 +2158,7 @@ let translations: [String: [String: String]] = [
         "reminder.periodEnd": "%@ endet",
         "reminder.presetPeriodStart": "%1$@ beginnt  %2$@ %3$@",
         "reminder.presetPeriodEnd": "%1$@ endet  %2$@ %3$@",
+        "period.deleteReminders": "Erinnerungen, die ihm folgen, werden ebenfalls entfernt: %@",
     ],
 ]
 // Template order.
@@ -2391,4 +2400,5 @@ let translationKeys: [String] = [
     "reminder.periodEnd",
     "reminder.presetPeriodStart",
     "reminder.presetPeriodEnd",
+    "period.deleteReminders",
 ]
