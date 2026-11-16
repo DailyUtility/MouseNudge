@@ -7,6 +7,8 @@ tmp=$(mktemp -d); trap 'rm -rf "$tmp"' EXIT
 sed '/^final class ClosureTarget/,$d' Sources/main.swift \
   | sed -e 's/^var workStart: String .*/var workStart = "09:00"/' \
         -e 's/^var workEnd: String .*/var workEnd = "18:00"/' \
+        -e 's/^var lunchStart: String .*/var lunchStart = ""/' \
+        -e 's/^var lunchEnd: String .*/var lunchEnd = ""/' \
         -e "s#^let dir = .*#let dir = \"$tmp/data\"#" > "$tmp/main.swift"
 cat tests/ScheduleTests.swift >> "$tmp/main.swift"
 swiftc "$tmp/main.swift" Sources/Language.swift Sources/Strings.swift -o "$tmp/tests"

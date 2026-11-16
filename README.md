@@ -6,7 +6,7 @@ A small macOS menu bar app that runs scheduled tasks around your work time: pop-
 
 ## Features
 
-- Work hours on working days (Monday–Friday), default 09:00–18:00. They are the fixed first row under Periods, edited there.
+- Work hours on working days (Monday–Friday), default 09:00–18:00. They are the fixed first row under Periods, edited there. Lunch, default 12:00–13:00, sits inside them and can be unticked: it is not work time, so there is no nudging and tasks every few minutes stop; a task can pick Lunch to run at its start or end, and a countdown shows before it.
 - Night shifts: a stretch like 22:00–06:00 belongs to the day it starts on.
 - Public holidays from any iCalendar subscription (`.ics` or `webcal://`, e.g. a holiday calendar from Apple Calendar or officeholidays.com). None is set by default, so only weekends are days off until you add one under **More → Subscribe to Holiday Calendar**.
 - Overtime (one day, several days in a row, or repeating), periods (daily, weekly, monthly, one-off), and leave (whole days or part of a day). Monthly goes by weekday (1st to 5th or last) or by date (a day of the month, the last day, or N days from the end), for overtime, periods and tasks alike.
@@ -109,7 +109,7 @@ Shiftbell 是一个 macOS 菜单栏小工具，围绕上班时间运行定时任
 
 ### 功能
 
-- 上班时间只算工作日（周一到周五），默认 09:00–18:00。它是「时段」列表里固定的第一行，在那里修改。
+- 上班时间只算工作日（周一到周五），默认 09:00–18:00。它是「时段」列表里固定的第一行，在那里修改。上班时间里还有一段午餐，默认 12:00–13:00，可以取消勾选：午餐不算上班，不挪鼠标，每隔几分钟的任务也会停下；定时任务可以选「午餐」，在它开始或结束时运行，开始前也有倒计时。
 - 支持夜班：像 22:00–06:00 这样跨午夜的时段，算在开始的那一天。
 - 节假日来自任意日历订阅（`.ics` 或 `webcal://`，例如 Apple 日历里的节假日日历，或 officeholidays.com）。默认不设置，这时只排除周末；在"更多 → 订阅假期日历"里设置。
 - 支持加班（单天、连续多天、或重复）、时段（每天、每周、每月、单次）和请假（整天或几个小时）。每月可以按星期（第一到第五个或最后一个星期几），也可以按日期（几号、最后一天或倒数第几天），加班、时段和定时任务都一样。

@@ -16,7 +16,7 @@ func check<V: Equatable>(_ name: String, _ got: V, _ want: V) {
 }
 func window(_ s: String) -> Bool { inWindow(at(s)) }
 func reset(start: String = "09:00", end: String = "18:00") {
-    workStart = start; workEnd = end; intervalMinutes = 10
+    workStart = start; workEnd = end; lunchStart = ""; lunchEnd = ""; intervalMinutes = 10
     holidays = HolidayCache(fetched: "", years: [], days: [:]); leaves = []; overtimes = []; periods = []
 }
 
@@ -94,11 +94,11 @@ check("overtime: weekly Tuesday otherwise", window("2026-11-24 20:00"), true)
 check("overtime: weekly Saturday", window("2026-11-14 11:00"), true)
 overtimes.append(Overtime(from: "10:00", to: "12:00", note: "", rule: "once:2026-11-17"))
 check("overtime: one-off on a holiday", window("2026-11-17 11:00"), true)
-periods = [Period(id: "lunch", from: "12:00", to: "13:00", note: "lunch", rule: nil)]
-jobs = [Job(action: "nudge", when: "every", every: 10, skip: ["lunch"])]
+periods = [Period(id: "meal", from: "12:00", to: "13:00", note: "lunch", rule: nil)]
+jobs = [Job(action: "nudge", when: "every", every: 10, skip: ["meal"])]
 check("rest: pauses Saturday overtime", window("2026-11-14 12:30"), false)
 check("rest: not on a day off", skipsOn(nudgeJob, at("2026-11-15 12:30")).count, 0)
-jobs = [Job(action: "notify", when: "start", follow: ["lunch"])]
+jobs = [Job(action: "notify", when: "start", follow: ["meal"])]
 check("rest: its task on Saturday overtime", due("2026-11-14 12:00").count, 1)
 check("rest: no task on a day off", due("2026-11-15 12:00").count, 0)
 jobs = []; periods = []
@@ -219,8 +219,8 @@ check("task: not at the edge itself", due("2026-11-13 09:00").count, 0)
 jobs = []
 
 // Period tasks follow the period as it is now
-periods = [Period(id: "lunch", from: "12:00", to: "13:00", note: "lunch", rule: nil)]
-jobs = [Job(action: "notify", when: "both", follow: ["lunch"])]
+periods = [Period(id: "meal", from: "12:00", to: "13:00", note: "lunch", rule: nil)]
+jobs = [Job(action: "notify", when: "both", follow: ["meal"])]
 check("period task: start", due("2026-11-13 12:00"), [T("reminder.periodStart", "lunch")])
 check("period task: end", due("2026-11-13 13:00"), [T("reminder.periodEnd", "lunch")])
 check("period task: not on Saturday", due("2026-11-14 12:00").count, 0)
@@ -243,19 +243,19 @@ jobs = []
 
 // Every few minutes while inside what the task follows
 reset()
-periods = [Period(id: "lunch", from: "12:00", to: "13:00", note: "", rule: nil)]
+periods = [Period(id: "meal", from: "12:00", to: "13:00", note: "", rule: nil)]
 jobs = [Job(action: "notify", text: "water", when: "every", every: 30)]
 check("every: on the mark", due("2026-11-13 10:30"), ["water"])
 check("every: off the mark", due("2026-11-13 10:15").count, 0)
 check("every: not before work", due("2026-11-13 08:30").count, 0)
 check("every: not on Saturday", due("2026-11-14 10:30").count, 0)
 check("every: a period alone does not quiet it", due("2026-11-13 12:30"), ["water"])
-jobs[0].skip = ["lunch"]
+jobs[0].skip = ["meal"]
 check("every: quiet in a period it skips", due("2026-11-13 12:30").count, 0)
 check("every: back after the period", due("2026-11-13 13:00"), ["water"])
 jobs.append(Job(action: "nudge", when: "every", every: 10, skip: []))
 check("every: the nudge's pauses are its own", window("2026-11-13 12:30"), true)
-jobs = [Job(action: "notify", text: "stretch", when: "every", follow: ["lunch"], every: 30)]
+jobs = [Job(action: "notify", text: "stretch", when: "every", follow: ["meal"], every: 30)]
 check("every: inside the period it follows", due("2026-11-13 12:30"), ["stretch"])
 leaves = [Leave(start: "2026-11-13", end: "2026-11-13", note: "", from: "12:00", to: "14:00")]
 check("every: part leave over the period it follows", due("2026-11-13 12:30").count, 0)
@@ -399,6 +399,32 @@ check("overlap: after work", clockOverlap(("20:00", "23:00"), ("09:00", "18:00")
 check("overlap: touching end", clockOverlap(("18:00", "19:00"), ("09:00", "18:00")), false)
 check("overlap: night shift", clockOverlap(("23:00", "01:00"), ("22:00", "06:00")), true)
 check("overlap: past midnight into day", clockOverlap(("08:00", "10:00"), ("22:00", "09:00")), true)
+
+// Lunch
+reset(); lunchStart = "12:00"; lunchEnd = "13:00"
+check("lunch: before", window("2026-11-13 11:59"), true)
+check("lunch: inside", window("2026-11-13 12:30"), false)
+check("lunch: after", window("2026-11-13 13:00"), true)
+check("lunch: weekend has none", lunchSpans(at("2026-11-14 12:00")).count, 0)
+check("lunch: nudge resumes at its end", show(nextStart(after: at("2026-11-13 12:10"))), "2026-11-13 13:00")
+check("lunch: fits", lunchInWork() != nil, true)
+check("lunch: outside work", lunchInWork("19:00", "20:00") == nil, true)
+check("lunch: runs past work end", lunchInWork("17:30", "18:30") == nil, true)
+check("lunch: work clock", workClock().map { $0.0 + "-" + $0.1 }, ["09:00-12:00", "13:00-18:00"])
+periods = [Period(from: "12:00", to: "13:00", note: "x", rule: nil)]
+check("lunch: period inside lunch meets no work", periodMeetsWork(periods[0]), false)
+jobs = [Job(action: "notify", when: "both", follow: ["lunch"]), Job(action: "notify", text: "water", when: "every", follow: ["work"], every: 30)]
+check("lunch: pop-up at its start", due("2026-11-13 12:00"), [T("reminder.periodStart", T("form.lunch"))])
+check("lunch: every-few-minutes task stops", due("2026-11-13 12:30").count, 0)
+check("lunch: and comes back", due("2026-11-13 13:00"), [T("reminder.periodEnd", T("form.lunch")), "water"])
+jobs = []; periods = []
+check("lunch: countdown names it", upcomingEvent(after: at("2026-11-13 11:55"), within: 600)?.name, T("form.lunch"))
+jobs = []
+reset(start: "22:00", end: "06:00"); lunchStart = "02:00"; lunchEnd = "03:00"
+check("lunch: night shift Fri 02:30 Sat", window("2026-11-14 02:30"), false)
+check("lunch: night shift Fri 03:30 Sat", window("2026-11-14 03:30"), true)
+check("lunch: night shift Thu 02:30 Fri", window("2026-11-13 02:30"), false)
+reset()
 
 print(failures == 0 ? "OK: \(checks) checks passed" : "\(failures) of \(checks) checks failed")
 exit(failures == 0 ? 0 : 1)

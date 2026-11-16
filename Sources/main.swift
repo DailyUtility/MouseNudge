@@ -27,6 +27,9 @@ var interval: TimeInterval { TimeInterval(intervalMinutes * 60) }
 // Work hours on working days, set from the menu.
 var workStart: String { UserDefaults.standard.string(forKey: "workStart") ?? "09:00" }
 var workEnd: String { UserDefaults.standard.string(forKey: "workEnd") ?? "18:00" }
+// Lunch inside work hours, 12:00–13:00 unless changed; an empty start means none.
+var lunchStart: String { UserDefaults.standard.string(forKey: "lunchStart") ?? "12:00" }
+var lunchEnd: String { UserDefaults.standard.string(forKey: "lunchEnd") ?? "13:00" }
 // Off by default: a locked Mac means the person is away, and a nudge could keep waking the screen.
 var nudgeWhenLocked: Bool { UserDefaults.standard.bool(forKey: "nudgeWhenLocked") }
 func screenLocked() -> Bool { (CGSessionCopyCurrentDictionary() as? [String: Any])?["CGSSessionScreenIsLocked"] as? Bool ?? false }
@@ -322,10 +325,28 @@ func overtimeSpans(_ d: Date) -> [(from: String, to: String)] {
 // "22:00–次日06:00", or for overtime over several days "11/14 09:00–11/16 15:00".
 func otSpanText(_ o: Overtime) -> String { o.until.map { "\(md(onceDay(o.rule) ?? "")) \(o.from)–\(md($0)) \(o.to)" } ?? spanText(o.from, o.to) }
 func workSpans(_ d: Date) -> [(from: String, to: String)] { isWorkday(d) ? [(workStart, workEnd)] : [] }
+// Lunch from `s` to `e` minutes after the start of work, or nil when there is none or it does not fit inside work hours.
+func lunchInWork(_ ls: String = lunchStart, _ le: String = lunchEnd, start ws: String = workStart, end we: String = workEnd) -> (s: Int, e: Int)? {
+    guard !ls.isEmpty, ls != le else { return nil }
+    let w0 = minutesOf(ws), len = minutesOf(we) - w0 + (overnight(ws, we) ? 1440 : 0)
+    let s = (minutesOf(ls) - w0 + 1440) % 1440, e = s + (minutesOf(le) - minutesOf(ls) + 1440) % 1440
+    return e <= len ? (s, e) : nil
+}
+// Lunch on the day its work stretch starts; after midnight on a night shift it belongs to the morning it falls on.
+func lunchSpans(_ d: Date) -> [(from: String, to: String)] {
+    guard let l = lunchInWork() else { return [] }
+    let nextMorning = minutesOf(workStart) + l.s >= 1440
+    return isWorkday(nextMorning ? dayBefore(d) : d) ? [(lunchStart, lunchEnd)] : []
+}
+// Work hours as times of day with lunch taken out.
+func workClock() -> [(String, String)] {
+    guard lunchInWork() != nil else { return [(workStart, workEnd)] }
+    return [(workStart, lunchStart), (lunchEnd, workEnd)].filter { $0.0 != $0.1 }
+}
 
 func inWindow(_ d: Date) -> Bool {
     if inBreak(d) { return false }
-    return covered(d, overtimeSpans) || covered(d, workSpans)
+    return covered(d, overtimeSpans) || covered(d, workSpans) && !covered(d, lunchSpans)
 }
 
 // The first moment after `d` when nudging may start again: the start of work hours on a working day, an overtime start, or a pause end.
@@ -334,7 +355,7 @@ func nextStart(after d: Date) -> Date {
     for offset in 0..<400 {
         let day = c.date(byAdding: .day, value: offset, to: c.startOfDay(for: d))!
         // Break ends today include those of last night's breaks that run past midnight.
-        var marks = overtimeSpans(day).map(\.from) + (pausesOn(day) + pausesOn(dayBefore(day))).map(\.to)
+        var marks = overtimeSpans(day).map(\.from) + (pausesOn(day) + pausesOn(dayBefore(day)) + lunchSpans(day)).map(\.to)
         if isWorkday(day) { marks.append(workStart) }
         for m in Set(marks).sorted() {
             let p = m.split(separator: ":").compactMap { Int($0) }
@@ -382,7 +403,7 @@ struct Job: Codable, Equatable {
     var when: String; var at: String? = nil; var rule: String? = nil
     // A repeating "at" task that also runs on days off (weekends, holidays, leave).
     var anyDay: Bool? = nil
-    // Each "work" for work hours, "overtime", or a period's id; nil means work hours and overtime.
+    // Each "work" for work hours, "lunch", "overtime", or a period's id; nil means work hours and overtime.
     var follow: [String]? = nil; var offset: Int? = nil; var every: Int? = nil; var lead: Int? = nil; var lag: Int? = nil
     // The ids of the periods a task every few minutes (the nudge too) is quiet in.
     var skip: [String]? = nil
@@ -409,7 +430,7 @@ func clockOverlap(_ a: (String, String), _ b: (String, String)) -> Bool {
 }
 // Whether the nudge can run in a period at all: it has to touch work hours or some overtime (one over several days covers whole days).
 func periodMeetsWork(_ p: Period) -> Bool {
-    clockOverlap((p.from, p.to), (workStart, workEnd))
+    workClock().contains { clockOverlap((p.from, p.to), $0) }
         || overtimes.contains { $0.disabled != true && ($0.until != nil || clockOverlap((p.from, p.to), ($0.from, $0.to))) }
 }
 func hmOf(_ m: Int) -> String { String(format: "%02d:%02d", m / 60 % 24, m % 60) }
@@ -425,6 +446,7 @@ func follows(_ j: Job) -> [String] { j.follow ?? ["work", "overtime"] }
 func followSpans(_ f: String, _ d: Date) -> [(from: String, to: String)] {
     switch f {
     case "work": return workSpans(d)
+    case "lunch": return lunchSpans(d)
     case "overtime": return overtimeSpans(d)
     case let id: return periods.first { $0.id == id }.map { periodSpans($0, d) } ?? []
     }
@@ -435,6 +457,7 @@ func appSpans(_ j: Job, _ d: Date) -> [(from: String, to: String)] { jobSpans(j,
 func followPaused(_ f: String) -> Bool {
     switch f {
     case "work": return false
+    case "lunch": return lunchInWork() == nil
     case "overtime": return !overtimes.isEmpty && overtimes.allSatisfy { $0.disabled == true }
     case let id: return periods.first { $0.id == id }?.disabled == true
     }
@@ -470,6 +493,7 @@ func periodName(_ p: Period) -> String { p.note.isEmpty ? T("period.unnamed") : 
 func followTitle(_ f: String) -> String {
     switch f {
     case "work": return T("apps.followWork")
+    case "lunch": return T("form.lunch")
     case "overtime": return T("section.overtime")
     case let id: return periods.first { $0.id == id }.map(periodName) ?? T("apps.periodGone")
     }
@@ -495,6 +519,8 @@ func jobsDue(_ d: Date) -> [(job: Job, text: String)] {
             let n = j.every ?? 0
             guard n > 0, minutesOf(hm) % n == 0, !onPartLeave(m), covered(m, { jobSpans(j, $0) }) else { continue }
             if covered(m, { d in skipsOn(j, d).map { ($0.from, $0.to) } }) { continue }
+            // Lunch is not work: a task running in work hours stops for it, unless something else it follows goes on.
+            if covered(m, lunchSpans) && !covered(m, { d in follows(j).filter { $0 != "work" }.flatMap { followSpans($0, d) } }) { continue }
             add(j.text.isEmpty ? T("reminder.untitled", hm) : j.text)
         default:
             let early = TimeInterval((j.offset ?? 0) * 60)
@@ -554,14 +580,15 @@ func dueBetween(after from: Date, upTo to: Date) -> [(at: Date, job: Job, text: 
 }
 
 // The nearest period start or timed pop-up in the minutes after `d` (up to `within` seconds away), for the menu bar
-// countdown. A period counts when it starts in work or overtime and is named or pauses the nudge; pop-ups every few
+// countdown. Lunch counts, and a period when it starts in work or overtime and is named or pauses the nudge; pop-ups every few
 // minutes don't count.
 func upcomingEvent(after d: Date, within: TimeInterval) -> (at: Date, name: String)? {
     var m = Calendar.current.dateInterval(of: .minute, for: d)!.end
     while m.timeIntervalSince(d) <= within {
         let hm = hmFmt.string(from: m)
         let working = covered(m, workSpans) || covered(m, overtimeSpans)
-        let starting = !working ? [] : periods.filter { $0.from == hm && periodOn($0, m) && (!$0.note.isEmpty || nudgeJob?.skip?.contains($0.id) == true) }.map(periodName)
+        let lunch = covered(m, lunchSpans) && lunchStart == hm ? [T("form.lunch")] : []
+        let starting = !working ? lunch : lunch + periods.filter { $0.from == hm && periodOn($0, m) && (!$0.note.isEmpty || nudgeJob?.skip?.contains($0.id) == true) }.map(periodName)
         let names = starting + jobsDue(m).filter { $0.job.action == "notify" && $0.job.when != "every" }.map(\.text)
         if !names.isEmpty { return (m, names.joined(separator: T("common.listSeparator"))) }
         m += 60
@@ -814,7 +841,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         quitItem.title = T("menu.quit")
         // Always says "Language" too, so someone stuck in a language they can't read still finds it.
         languageItem.title = T("menu.language") == "Language" ? "Language" : T("menu.language") + " / Language"
-        workHoursItem.title = T("menu.workHours", workStart, endText(workStart, workEnd))
+        workHoursItem.title = workHoursTitle()
         clearLogItem.title = T("menu.clearLog"); autoClearItem.title = T("menu.autoClearLog")
         lastLine.title = lastRun.map { T("status.last", $0.time, T($0.result)) } ?? T("status.lastNever")
         if fetching { holidayLine.title = T("status.holidaysFetching") }
@@ -1008,11 +1035,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
             let ots = overtime(on: dayBefore(now)).filter { $0.until == nil && spanCovers($0.from, $0.to, hm, startedToday: false) } + overtime(on: now)
             let ot = ots.map { otSpanText($0) + ($0.note.isEmpty ? "" : " " + $0.note) }
             overtimeLine.title = T("status.overtimeToday", ot.joined(separator: T("common.listSeparator"))); overtimeLine.isHidden = ot.isEmpty
-            // The periods the nudge is quiet in, while it is on.
+            // Lunch and the periods the nudge is quiet in, while it is on.
             let quiet = { (d: Date) in nudging ? skipsOn(nudgeJob, d) : [] }
             let late = quiet(dayBefore(now)).filter { spanCovers($0.from, $0.to, hm, startedToday: false) }
             let br = late.map { ($0, false) } + quiet(now).map { ($0, true) }
-            let brText = br.map { b, today in spanText(b.from, b.to) + (b.note.isEmpty ? "" : " " + b.note) + (spanCovers(b.from, b.to, hm, startedToday: today) ? T("status.onBreak") : "") }
+            let lunchToday = nudging && (!lunchSpans(now).isEmpty || covered(now, lunchSpans))
+            let lunchText = lunchToday ? [spanText(lunchStart, lunchEnd) + " " + T("form.lunch") + (covered(now, lunchSpans) ? T("status.onBreak") : "")] : []
+            let brText = (lunchText + br.map { b, today in spanText(b.from, b.to) + (b.note.isEmpty ? "" : " " + b.note) + (spanCovers(b.from, b.to, hm, startedToday: today) ? T("status.onBreak") : "") })
             breakLine.title = T("status.breaks", brText.joined(separator: T("common.listSeparator"))); breakLine.isHidden = brText.isEmpty
             // Only this year is shown, even in December; later years stay in the data for scheduling.
             let year = String(k.prefix(4))
@@ -1451,6 +1480,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     func followName(_ f: String) -> String {
         switch f {
         case "work": return T("apps.followWork")
+        case "lunch": return T("form.lunch") + " " + (lunchInWork() == nil ? T("lunch.none") : spanText(lunchStart, lunchEnd))
         case "overtime": return T("section.overtime")
         case let id: return periods.first { $0.id == id }.map { $0.note.isEmpty ? spanText($0.from, $0.to) : $0.note + " " + spanText($0.from, $0.to) } ?? T("apps.periodGone")
         }
@@ -1549,7 +1579,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         // Any number of times can be followed. A turned-off or deleted period stays on the list while the task follows it.
         let pickedFollow = old.map(follows) ?? ["work", "overtime"]
         let shown = periods.filter { $0.disabled != true || pickedFollow.contains($0.id) }
-        var choices: [String] = ["work", "overtime"] + shown.map(\.id), titles = [T("apps.followWork"), T("section.overtime")] + shown.map(periodLabel)
+        let lunch = lunchInWork() != nil || pickedFollow.contains("lunch") ? ["lunch"] : []
+        var choices: [String] = ["work"] + lunch + ["overtime"] + shown.map(\.id)
+        var titles = (["work"] + lunch + ["overtime"]).map(followName) + shown.map(periodLabel)
         for f in pickedFollow where !choices.contains(f) { choices.append(f); titles.append(T("apps.periodGone")) }
         let boxes = titles.map { NSButton(checkboxWithTitle: $0, target: nil, action: nil) }
         zip(choices, boxes).forEach { $1.state = pickedFollow.contains($0) ? .on : .off }
@@ -1685,14 +1717,28 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         }
     }
 
+    func workHoursTitle() -> String {
+        T("menu.workHours", workStart, endText(workStart, workEnd)) + (lunchInWork() == nil ? "" : T("common.paren", T("form.lunch") + " " + spanText(lunchStart, lunchEnd)))
+    }
     @objc func setWorkHours() {
         let t1 = timePicker(workStart), t2 = timePicker(workEnd)
-        guard form(T("workHours.title"), sentences(T("workHours.help"), T("workHours.nightShiftHelp")), [(T("form.from"), t1), (T("form.to"), t2)], button: T("common.save"),
-                   check: { hmFmt.string(from: t2.dateValue) != hmFmt.string(from: t1.dateValue) ? nil : T("error.sameStartEnd") }) else { return }
-        let (s, e) = (hmFmt.string(from: t1.dateValue), hmFmt.string(from: t2.dateValue))
+        // Lunch is a tick and its own from–to on one row; unticked means none.
+        let hasLunch = NSButton(checkboxWithTitle: "", target: nil, action: nil); hasLunch.state = lunchStart.isEmpty ? .off : .on
+        let l1 = timePicker(lunchStart.isEmpty ? "12:00" : lunchStart), l2 = timePicker(lunchEnd.isEmpty ? "13:00" : lunchEnd)
+        let lunchRow = NSStackView(views: [hasLunch, l1, NSTextField(labelWithString: "–"), l2]); lunchRow.spacing = 6
+        let hm = { (p: NSDatePicker) in hmFmt.string(from: p.dateValue) }
+        guard form(T("workHours.title"), sentences(T("workHours.help"), T("workHours.lunchHelp"), T("workHours.nightShiftHelp")),
+                   [(T("form.from"), t1), (T("form.to"), t2), (T("form.lunch"), lunchRow)], button: T("common.save"),
+                   check: {
+                       if hm(t2) == hm(t1) { return T("error.sameStartEnd") }
+                       if hasLunch.state == .on && lunchInWork(hm(l1), hm(l2), start: hm(t1), end: hm(t2)) == nil { return T("error.lunchOutside") }
+                       return nil
+                   }) else { return }
+        let (s, e) = (hm(t1), hm(t2))
         UserDefaults.standard.set(s, forKey: "workStart"); UserDefaults.standard.set(e, forKey: "workEnd")
-        workHoursItem.title = T("menu.workHours", s, endText(s, e))
-        appendLog(T("log.workHoursChanged", s, endText(s, e))); rebuildPeriodMenu(); rebuildTasksMenu()
+        UserDefaults.standard.set(hasLunch.state == .on ? hm(l1) : "", forKey: "lunchStart"); UserDefaults.standard.set(hm(l2), forKey: "lunchEnd")
+        workHoursItem.title = workHoursTitle()
+        appendLog(T("log.workHoursChanged", s, endText(s, e)) + (lunchInWork() == nil ? "" : T("common.paren", T("form.lunch") + " " + spanText(lunchStart, lunchEnd)))); rebuildPeriodMenu(); rebuildTasksMenu()
         next = nextSlot(after: Date()); tick()
     }
     @objc func togglePause() { paused.toggle(); UserDefaults.standard.set(paused, forKey: "paused"); tick() }
