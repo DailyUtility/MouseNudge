@@ -165,7 +165,7 @@ check("task: start of work", due("2026-11-13 09:00"), [T("reminder.workStart")])
 check("task: end of work", due("2026-11-13 18:00"), [T("reminder.workEnd")])
 check("task: the nudge is never due", due("2026-11-13 09:30").count, 0)
 check("task: no start on Saturday", due("2026-11-14 09:00").count, 0)
-check("task: fresh install nudge off", defaultJobs(nudging: false, interval: 10).first?.disabled, true)
+check("task: fresh install has no nudge", defaultJobs(nudging: false, interval: 10).contains { $0.action == "nudge" }, false)
 overtimes = [Overtime(from: "18:00", to: "20:00", note: "", rule: "once:2026-11-13")]
 let otStart = T("reminder.periodStart", T("section.overtime")), otEnd = T("reminder.periodEnd", T("section.overtime"))
 check("task: overtime starts as work ends", due("2026-11-13 18:00"), [otStart])

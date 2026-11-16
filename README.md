@@ -1,6 +1,6 @@
 # Shiftbell
 
-A small macOS menu bar app that runs scheduled tasks around your work time: pop-ups, opening and quitting apps, shortcuts, links and shell commands. One of the tasks, off on a fresh install, nudges the mouse pointer by one pixel (and back) every few minutes during your work hours, so the Mac and chat apps don't mark you as away.
+A small macOS menu bar app that runs scheduled tasks around your work time: pop-ups, opening and quitting apps, shortcuts, links and shell commands. One task, added when you want it (a fresh install has none), nudges the mouse pointer by one pixel (and back) every few minutes during your work hours, so the Mac and chat apps don't mark you as away.
 
 [中文说明](#中文说明)
 
@@ -105,7 +105,7 @@ A row whose key already exists replaces it. Running the tool without a rows file
 
 ## 中文说明
 
-Shiftbell 是一个 macOS 菜单栏小工具，围绕上班时间运行定时任务：弹窗提醒、自动开关 App、运行快捷指令、打开链接和运行命令。其中一个任务是挪鼠标（新装时关闭）：在上班时间里每隔几分钟把鼠标移动 1 像素再移回来，这样电脑和聊天软件就不会把你显示为"离开"。
+Shiftbell 是一个 macOS 菜单栏小工具，围绕上班时间运行定时任务：弹窗提醒、自动开关 App、运行快捷指令、打开链接和运行命令。其中一种任务是挪鼠标（新装时没有，需要时在定时任务里添加）：在上班时间里每隔几分钟把鼠标移动 1 像素再移回来，这样电脑和聊天软件就不会把你显示为"离开"。
 
 ### 功能
 

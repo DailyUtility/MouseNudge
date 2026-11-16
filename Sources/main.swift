@@ -388,10 +388,10 @@ struct Job: Codable, Equatable {
     var skip: [String]? = nil
 }
 var jobs: [Job] = []
-// A fresh install starts with the nudge off and pop-ups at the start and end of work.
+// A fresh install starts with pop-ups at the start and end of work and no nudge; it is added as a task when wanted.
 func defaultJobs(nudging: Bool, interval: Int) -> [Job] {
-    [Job(disabled: nudging ? nil : true, action: "nudge", when: "every", every: interval),
-     Job(action: "notify", when: "start", follow: ["work", "overtime"]), Job(action: "notify", when: "end", follow: ["work", "overtime"])]
+    (nudging ? [Job(action: "nudge", when: "every", every: interval)] : []) +
+    [Job(action: "notify", when: "start", follow: ["work", "overtime"]), Job(action: "notify", when: "end", follow: ["work", "overtime"])]
 }
 var nudgeJob: Job? { jobs.first { $0.action == "nudge" } }
 var nudging: Bool { nudgeJob.map { $0.disabled != true } ?? false }
@@ -764,7 +764,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         loadJSON(overtimeURL, into: &overtimes)
         if FileManager.default.fileExists(atPath: periodsURL.path) { loadJSON(periodsURL, into: &periods) }
         else { periods = [Period(from: "12:00", to: "13:00", note: T("break.lunch"), rule: nil)]; saveJSON(periods, to: periodsURL) }
-        // A Mac that nudged before tasks existed keeps nudging at its interval; a fresh install starts with the nudge off.
+        // A Mac that nudged before tasks existed keeps nudging at its interval; a fresh install has no nudge.
         if FileManager.default.fileExists(atPath: jobsURL.path) { loadJSON(jobsURL, into: &jobs) }
         else {
             let v = UserDefaults.standard.integer(forKey: "intervalMinutes")
