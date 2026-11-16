@@ -1323,7 +1323,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     func jobLabel(_ j: Job) -> String {
         let names = follows(j).map(followName).joined(separator: T("common.listSeparator")), o = j.offset ?? 0
         switch j.action {
-        case "nudge": return T("job.nudgeLabel", String(j.every ?? 10))
+        case "nudge": return T("job.every", names, String(j.every ?? 10)) + "  " + T("job.nudge")
         case "app":
             let lead = j.lead ?? 0, lag = j.lag ?? 0
             let timing = j.keepOpen == true ? (lead > 0 ? T("apps.earlyNoQuit", String(lead)) : T("apps.noQuit"))
