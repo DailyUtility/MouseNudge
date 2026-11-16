@@ -115,6 +115,12 @@ check("days off: holiday", due("2026-11-17 21:00"), ["pills"])
 check("days off: leave", due("2026-11-18 21:00"), ["pills"])
 jobs[0].anyDay = nil
 check("days off: off by default", due("2026-11-17 21:00").count, 0)
+leaves = [Leave(start: "2026-11-13", end: "2026-11-13", note: "", from: "20:00", to: "22:00")]
+check("part leave: timed task waits", due("2026-11-13 21:00").count, 0)
+jobs[0].anyDay = true
+check("part leave: days off too still runs", due("2026-11-13 21:00"), ["pills"])
+jobs = [Job(action: "notify", text: "once", when: "at", at: "21:00", rule: "once:2026-11-13")]
+check("part leave: one-off still runs", due("2026-11-13 21:00"), ["once"])
 reset()
 jobs = defaultJobs(nudging: true, interval: 15)
 check("task: default nudge interval", nudgeJob?.every, 15)

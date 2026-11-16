@@ -307,6 +307,7 @@ func endText(_ from: String, _ to: String) -> String { overnight(from, to) ? T("
 func spanText(_ from: String, _ to: String) -> String { from + "–" + endText(from, to) }
 
 func inBreak(_ d: Date) -> Bool { covered(d, pausesOn) }
+func onPartLeave(_ d: Date) -> Bool { covered(d) { partLeaves(on: dayKey.string(from: $0)).map { ($0.from!, $0.to!) } } }
 func overtimeSpans(_ d: Date) -> [(from: String, to: String)] {
     let k = dayKey.string(from: d)
     return overtime(on: d).map { o in o.until == nil ? (o.from, o.to) : (k == onceDay(o.rule) ? o.from : "00:00", k == o.until ? o.to : "24:00") }
@@ -360,8 +361,8 @@ func slot(after d: Date, now: Date) -> Date {
 
 // Scheduled tasks: each is an action and when it runs. Actions: "notify" (a pop-up), "nudge" (the mouse nudge above,
 // at most one, every `every` minutes during work time), "app" (opened and quit), "shortcut", "url" or "script".
-// When: "at" a time on the days `rule` picks (same rules as periods; repeating ones on working days only, a one-off on
-// its date), at the "start", "end" or "both" edges of what it follows (`offset` minutes early), "every" `every` minutes
+// When: "at" a time on the days `rule` picks (same rules as periods; repeating ones on working days only and not in part-day leave, a one-off
+// on its date), at the "start", "end" or "both" edges of what it follows (`offset` minutes early), "every" `every` minutes
 // while inside it (not in a break unless it follows that break), or "during" it (apps: opened `lead` minutes before it
 // starts and quit `lag` minutes after it ends, each 0–240, or with `keepOpen` never quit).
 let jobsURL = URL(fileURLWithPath: dir + "/tasks.json")
@@ -467,7 +468,7 @@ func jobsDue(_ d: Date) -> [(job: Job, text: String)] {
         func add(_ s: String) { if !due.contains(where: { $0.job.id == j.id && $0.text == s }) { due.append((j, j.action == "notify" ? s : j.text)) } }
         switch j.when {
         case "at":
-            if j.at == hm && ruleApplies(j.rule, on: m) && (onceDay(j.rule) != nil || j.anyDay == true || isWorkday(m)) { add(j.text.isEmpty ? T("reminder.untitled", hm) : j.text) }
+            if j.at == hm && ruleApplies(j.rule, on: m) && (onceDay(j.rule) != nil || j.anyDay == true || isWorkday(m) && !onPartLeave(m)) { add(j.text.isEmpty ? T("reminder.untitled", hm) : j.text) }
         case "every":
             let n = j.every ?? 0
             guard n > 0, minutesOf(hm) % n == 0, covered(m, { jobSpans(j, $0) }) else { continue }
