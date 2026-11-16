@@ -260,6 +260,7 @@ let translations: [String: [String: String]] = [
         "job.anyDayTag": "含休息日",
         "job.heldTag": "已随之暂停",
         "job.during": "%@ 期间",
+        "job.notifyText": "弹窗「%@」",
     ],
     "en": [
         "week.first": "1st",
@@ -521,6 +522,7 @@ let translations: [String: [String: String]] = [
         "job.anyDayTag": "days off too",
         "job.heldTag": "paused with it",
         "job.during": "During %@",
+        "job.notifyText": "Pop-up “%@”",
     ],
     "zh-Hant": [
         "week.first": "第一個",
@@ -782,6 +784,7 @@ let translations: [String: [String: String]] = [
         "job.anyDayTag": "含休息日",
         "job.heldTag": "已隨之暫停",
         "job.during": "%@ 期間",
+        "job.notifyText": "彈窗「%@」",
     ],
     "ja": [
         "week.first": "第1",
@@ -1043,6 +1046,7 @@ let translations: [String: [String: String]] = [
         "job.anyDayTag": "休日も",
         "job.heldTag": "一緒に一時停止中",
         "job.during": "%@ の間",
+        "job.notifyText": "ポップアップ「%@」",
     ],
     "ko": [
         "week.first": "첫째",
@@ -1304,6 +1308,7 @@ let translations: [String: [String: String]] = [
         "job.anyDayTag": "쉬는 날 포함",
         "job.heldTag": "함께 일시 중지됨",
         "job.during": "%@ 동안",
+        "job.notifyText": "팝업 “%@”",
     ],
     "ms": [
         "week.first": "pertama",
@@ -1565,6 +1570,7 @@ let translations: [String: [String: String]] = [
         "job.anyDayTag": "termasuk hari cuti",
         "job.heldTag": "dijeda bersama",
         "job.during": "Semasa %@",
+        "job.notifyText": "Pop-timbul “%@”",
     ],
     "es": [
         "week.first": "primer",
@@ -1826,6 +1832,7 @@ let translations: [String: [String: String]] = [
         "job.anyDayTag": "incl. días libres",
         "job.heldTag": "en pausa con ello",
         "job.during": "Durante %@",
+        "job.notifyText": "Aviso «%@»",
     ],
     "fr": [
         "week.first": "1er",
@@ -2087,6 +2094,7 @@ let translations: [String: [String: String]] = [
         "job.anyDayTag": "jours de repos inclus",
         "job.heldTag": "en pause avec lui",
         "job.during": "Pendant %@",
+        "job.notifyText": "Fenêtre « %@ »",
     ],
     "de": [
         "week.first": "1.",
@@ -2348,6 +2356,7 @@ let translations: [String: [String: String]] = [
         "job.anyDayTag": "auch freie Tage",
         "job.heldTag": "mit pausiert",
         "job.during": "Während %@",
+        "job.notifyText": "Pop-up „%@“",
     ],
 ]
 // Template order.
@@ -2611,4 +2620,5 @@ let translationKeys: [String] = [
     "job.anyDayTag",
     "job.heldTag",
     "job.during",
+    "job.notifyText",
 ]

@@ -1359,7 +1359,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
             : o > 0 ? T("job.before" + edge, names, String(o)) : T("job.at" + edge, names)
         let what: String
         switch j.action {
-        case "notify": what = j.text.isEmpty ? T("job.notify") : j.text
+        case "notify": what = j.text.isEmpty ? T("job.notify") : T("job.notifyText", j.text)
         case "shortcut": what = T("job.runShortcut", j.text)
         case "url": what = T("job.openLink", j.text)
         default: what = T("job.runCommand", j.text)
