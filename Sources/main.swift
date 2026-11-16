@@ -757,7 +757,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         for (i, sym) in [(pauseItem, "pause.circle"), (workHoursItem, "clock"), (more, "ellipsis.circle")] {
             i.image = NSImage(systemSymbolName: sym, accessibilityDescription: nil)
         }
-        [lastLine, nextLine, holidayLine, todayLine, overtimeLine, breakLine, permLine, .separator(), pauseItem, .separator(), leaveRoot, overtimeRoot, periodRoot, tasksRoot, workHoursItem, .separator(), more, quit].forEach(menu.addItem)
+        [lastLine, nextLine, holidayLine, todayLine, overtimeLine, breakLine, permLine, .separator(), pauseItem, .separator(), leaveRoot, overtimeRoot, periodRoot, tasksRoot, .separator(), more, quit].forEach(menu.addItem)
         item.menu = menu
         loadHolidays()
         loadLeaves()
@@ -1105,17 +1105,17 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     }
 
     // Rebuilds a section's rows right under its heading: one row per entry (with edit, turn off/on and delete buttons), then
-    // the add item and any extra items. `toggle` flips entry i and returns whether it is now off; `edit` opens its form;
+    // the add item and any extra items. `head` items go first, as they are. `toggle` flips entry i and returns whether it is now off; `edit` opens its form;
     // `remove` asks, then deletes.
     func fill(_ root: NSMenuItem, _ rows: [(String, Bool)], toggle: @escaping (Int) -> Bool, edit: @escaping (Int) -> Void, remove: @escaping (Int) -> Void,
-              add: (String, Selector, String), extra: [NSMenuItem] = [], test: ((Int) -> Void)? = nil) {
+              add: (String, Selector, String), head: [NSMenuItem] = [], extra: [NSMenuItem] = [], test: ((Int) -> Void)? = nil) {
         let name = root.representedObject as! String
         sectionRows[name]?.forEach { if $0.menu != nil { menu.removeItem($0) } }
-        var items: [NSMenuItem] = rows.enumerated().map { i, r in
+        var items: [NSMenuItem] = head + rows.enumerated().map { i, r in
             let it = NSMenuItem(title: r.0, action: nil, keyEquivalent: "")
             it.view = EntryRowView(title: r.0, disabled: r.1, onToggle: { toggle(i) }, onEdit: { edit(i) }, onDelete: { remove(i) }, onTest: test.map { t in { t(i) } }); return it
         }
-        if rows.isEmpty { let none = NSMenuItem(title: T("menu.none"), action: nil, keyEquivalent: ""); none.isEnabled = false; items.append(none) }
+        if rows.isEmpty && head.isEmpty { let none = NSMenuItem(title: T("menu.none"), action: nil, keyEquivalent: ""); none.isEnabled = false; items.append(none) }
         let a = NSMenuItem(title: add.0, action: add.1, keyEquivalent: add.2); a.target = self
         a.image = NSImage(systemSymbolName: "plus.circle", accessibilityDescription: nil); items.append(a); items += extra
         let at = menu.index(of: root) + 1
@@ -1285,13 +1285,16 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     func editOvertime(_ old: Overtime?) {
         let rep = repeatRows(defaultIndex: 1, editing: old.map { ($0.rule, $0.until) })
         let t1 = timePicker(old?.from ?? "19:00"), t2 = timePicker(old?.to ?? "21:00"), note = noteField()
-        defer { withExtendedLifetime(rep.sync) {} }
+        // The pop-ups here are for all overtime, not just this one.
+        let edges = edgeRows("overtime", label: T("form.remindOvertime"))
+        defer { withExtendedLifetime((rep.sync, edges.sync)) {} }
         note.placeholderString = T("overtime.notePlaceholder"); note.stringValue = old?.note ?? ""
         guard form(T(old == nil ? "menu.addOvertime" : "edit.overtime"), sentences(T("overtime.help"), T("help.overnight"), T("overtime.multiDayHelp")),
                    // Start and End each put the date beside the time: 11/14 09:00 → 11/15 15:00.
-                   rep.rows.filter { $0.1 !== rep.day } + [(T("form.start"), pair(rep.day, t1)), (T("form.end"), pair(rep.endDay, t2)), (T("form.note"), note)],
+                   rep.rows.filter { $0.1 !== rep.day } + [(T("form.start"), pair(rep.day, t1)), (T("form.end"), pair(rep.endDay, t2)), (T("form.note"), note)] + edges.rows,
                    button: old == nil ? nil : T("common.save"),
-                   check: { rep.until() != nil || hmFmt.string(from: t2.dateValue) != hmFmt.string(from: t1.dateValue) ? nil : T("error.sameStartEnd") }) else { return }
+                   check: { rep.until() != nil || hmFmt.string(from: t2.dateValue) != hmFmt.string(from: t1.dateValue) ? edges.check() : T("error.sameStartEnd") }) else { return }
+        if edges.apply() { saveJSON(jobs, to: jobsURL); rebuildTasksMenu() }
         let o = Overtime(from: hmFmt.string(from: t1.dateValue), to: hmFmt.string(from: t2.dateValue), note: note.stringValue.trimmingCharacters(in: .whitespaces),
                          rule: rep.rule(), until: rep.until(), disabled: old?.disabled)
         put(o, over: old, in: &overtimes, label: otLabel, added: "log.overtimeAdded")
@@ -1326,12 +1329,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     func rebuildPeriodMenu() {
         // Repeating ones first, then one-offs by date; finished one-offs are removed by pruneExpired.
         periods.sort { (onceDay($0.rule) ?? "", $0.from) < (onceDay($1.rule) ?? "", $1.from) }
+        // Work hours come first; they can't be turned off or deleted, only edited.
         // While the nudge is on, each row says whether it pauses there, which is set on the nudge task.
         let quiet = Set(nudgeJob?.skip ?? [])
         let tag = { (p: Period) in nudging ? T("common.paren", T(quiet.contains(p.id) ? "period.nudgePaused" : "period.nudgeKept")) : "" }
         fill(periodRoot, periods.map { (periodLabel($0) + tag($0), $0.disabled == true) }, toggle: { [unowned self] i in
             defer { saveJSON(periods, to: periodsURL); replan(); checkApps() }; return flip(&periods[i].disabled, periodLabel(periods[i]))
-        }, edit: { [unowned self] in editPeriod(periods[$0]) }, remove: removePeriod, add: (T("menu.addPeriod"), #selector(addPeriod), "b"))
+        }, edit: { [unowned self] in editPeriod(periods[$0]) }, remove: removePeriod, add: (T("menu.addPeriod"), #selector(addPeriod), "b"), head: [workHoursItem])
     }
     // The Repeat/Date/Week/Weekday rows shared by overtime, periods and reminders. Keep `sync` alive while the form is open; `rule` reads the choice.
     // `endDay` is the end date field for a one-off that runs over several days; `until` reads it (nil unless after Date).
@@ -1383,28 +1387,74 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
             return repeatPop.indexOfSelectedItem == 1 && e > s ? e : nil
         })
     }
+    // Pop-ups at the start and end of a period, of work hours ("work") or of all overtime ("overtime"), set in its own form.
+    // They are pop-up tasks following `key` at its start, end or both, and still show under Tasks; the first one fills the
+    // rows in. `apply` changes nothing unless the choices did; then `key` comes off those tasks (one left following nothing
+    // is deleted) and one task for the new choices is added. Returns whether the tasks changed.
+    func edgeRows(_ key: String, label: String = T("form.remind")) -> (rows: [(String, NSView)], sync: ClosureTarget, check: () -> String?, apply: () -> Bool) {
+        let linked = jobs.filter { $0.action == "notify" && ["start", "end", "both"].contains($0.when) && follows($0).contains(key) }
+        let was = (start: linked.contains { $0.when != "end" }, end: linked.contains { $0.when != "start" },
+                   text: linked.first?.text ?? "", offset: linked.first?.offset ?? 0)
+        let start = NSButton(checkboxWithTitle: T("when.start"), target: nil, action: nil), end = NSButton(checkboxWithTitle: T("when.end"), target: nil, action: nil)
+        start.state = was.start ? .on : .off; end.state = was.end ? .on : .off
+        let message = noteField(), early = noteField()
+        message.placeholderString = T("job.messagePlaceholder"); message.stringValue = was.text; early.stringValue = String(was.offset)
+        // The text and minutes early only show while a pop-up is ticked.
+        let sync = ClosureTarget { [unowned self] in
+            let on = start.state == .on || end.state == .on
+            message.isHidden = !on; early.isHidden = !on; self.refitForm(start)
+        }
+        for b in [start, end] { b.target = sync; b.action = #selector(ClosureTarget.fire) }
+        sync.fire()
+        let minutes = { Int(early.stringValue.trimmingCharacters(in: .whitespaces)).flatMap { (0...240).contains($0) ? $0 : nil } }
+        return ([(label, pair(start, end)), (T("form.message"), message), (T("form.early"), early)], sync, {
+            early.isHidden || minutes() != nil ? nil : T("appTimes.invalid")
+        }, { [unowned self] in
+            let now = (start: start.state == .on, end: end.state == .on, text: message.stringValue.trimmingCharacters(in: .whitespaces), offset: minutes() ?? 0)
+            guard now.start != was.start || now.end != was.end || (now.start || now.end) && (now.text != was.text || now.offset != was.offset) else { return false }
+            jobs = jobs.compactMap { j in
+                guard linked.contains(where: { $0.id == j.id }) else { return j }
+                var x = j; x.follow = follows(j).filter { $0 != key }
+                if x.follow!.isEmpty { appendLog(T("log.taskDeleted", jobLabel(j))); return nil }
+                appendLog(T("log.itemEdited", jobLabel(j), jobLabel(x))); return x
+            }
+            if now.start || now.end {
+                let j = Job(action: "notify", text: now.text, when: now.start && now.end ? "both" : now.start ? "start" : "end", follow: [key], offset: now.offset > 0 ? now.offset : nil)
+                jobs.append(j); appendLog(T("log.taskAdded", jobLabel(j)))
+            }
+            return true
+        })
+    }
     @objc func addPeriod() { editPeriod(nil) }
-    // Tasks following an edited period, or quiet in it, keep doing so at its new times.
+    // Tasks following an edited period, or quiet in it, keep doing so at its new times. Its pop-ups and whether the nudge
+    // pauses in it are set right here; other tasks following it are counted under the help.
     func editPeriod(_ old: Period?) {
+        let id = old?.id ?? UUID().uuidString
         let rep = repeatRows(defaultIndex: 0, editing: old.map { ($0.rule, nil) })
         let t1 = timePicker(old?.from ?? "15:00"), t2 = timePicker(old?.to ?? "16:00"), note = noteField()
-        defer { withExtendedLifetime(rep.sync) {} }
+        let quiet = NSButton(checkboxWithTitle: T("period.skipNudge"), target: nil, action: nil)
+        quiet.state = nudgeJob?.skip?.contains(id) == true ? .on : .off; quiet.isHidden = nudgeJob == nil
+        let edges = edgeRows(id)
+        defer { withExtendedLifetime((rep.sync, edges.sync)) {} }
         note.placeholderString = T("period.notePlaceholder"); note.stringValue = old?.note ?? ""
-        guard form(T(old == nil ? "menu.addPeriod" : "edit.period"), sentences(T("period.help"), T("help.overnight")),
-                   rep.rows + [(T("form.from"), t1), (T("form.to"), t2), (T("form.note"), note)],
+        let others = jobs.filter { j in j.action != "nudge" && (j.follow?.contains(id) == true || j.skip?.contains(id) == true)
+            && !(j.action == "notify" && ["start", "end", "both"].contains(j.when)) }.count
+        guard form(T(old == nil ? "menu.addPeriod" : "edit.period"), sentences(T("period.help"), T("help.overnight"), others > 0 ? T("period.otherTasks", String(others)) : ""),
+                   rep.rows + [(T("form.from"), t1), (T("form.to"), t2), (T("form.note"), note), ("", quiet)] + edges.rows,
                    button: old == nil ? nil : T("common.save"),
-                   check: { hmFmt.string(from: t2.dateValue) != hmFmt.string(from: t1.dateValue) ? nil : T("error.sameStartEnd") }) else { return }
+                   check: { hmFmt.string(from: t2.dateValue) != hmFmt.string(from: t1.dateValue) ? edges.check() : T("error.sameStartEnd") }) else { return }
         var p = Period(from: hmFmt.string(from: t1.dateValue), to: hmFmt.string(from: t2.dateValue), note: note.stringValue.trimmingCharacters(in: .whitespaces),
                        rule: rep.rule())
-        if let o = old { p.id = o.id; p.disabled = o.disabled }
+        p.id = id; p.disabled = old?.disabled
         put(p, over: old, in: &periods, label: periodLabel, added: "log.periodAdded")
-        saveJSON(periods, to: periodsURL); rebuildPeriodMenu()
-        // A new period is offered to the nudge, which is where pausing in it is set.
-        if old == nil, nudging, let i = jobs.firstIndex(where: { $0.action == "nudge" }),
-           confirmRemove(T("period.askSkip"), periodLabel(p) + "\n\n" + T("period.askSkipHint"), ok: T("period.skipNudge"), keep: T("period.keepNudging")) {
-            let before = jobLabel(jobs[i]); jobs[i].skip = (jobs[i].skip ?? []) + [p.id]
-            saveJSON(jobs, to: jobsURL); appendLog(T("log.itemEdited", before, jobLabel(jobs[i])))
+        saveJSON(periods, to: periodsURL)
+        var changed = edges.apply()
+        if let i = jobs.firstIndex(where: { $0.action == "nudge" }), (quiet.state == .on) != (jobs[i].skip?.contains(id) == true) {
+            let before = jobLabel(jobs[i]), skip = (jobs[i].skip ?? []).filter { $0 != id } + (quiet.state == .on ? [id] : [])
+            jobs[i].skip = skip.isEmpty ? nil : skip
+            appendLog(T("log.itemEdited", before, jobLabel(jobs[i]))); changed = true
         }
+        if changed { saveJSON(jobs, to: jobsURL) }
         rebuildTasksMenu()
         replan(); checkApps()
     }
@@ -1672,9 +1722,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     }
 
     @objc func setWorkHours() {
-        let t1 = timePicker(workStart), t2 = timePicker(workEnd)
-        guard form(T("workHours.title"), sentences(T("workHours.help"), T("workHours.nightShiftHelp")), [(T("form.from"), t1), (T("form.to"), t2)], button: T("common.save"),
-                   check: { hmFmt.string(from: t2.dateValue) != hmFmt.string(from: t1.dateValue) ? nil : T("error.sameStartEnd") }) else { return }
+        let t1 = timePicker(workStart), t2 = timePicker(workEnd), edges = edgeRows("work")
+        defer { withExtendedLifetime(edges.sync) {} }
+        guard form(T("workHours.title"), sentences(T("workHours.help"), T("workHours.nightShiftHelp")), [(T("form.from"), t1), (T("form.to"), t2)] + edges.rows, button: T("common.save"),
+                   check: { hmFmt.string(from: t2.dateValue) != hmFmt.string(from: t1.dateValue) ? edges.check() : T("error.sameStartEnd") }) else { return }
+        if edges.apply() { saveJSON(jobs, to: jobsURL) }
         let (s, e) = (hmFmt.string(from: t1.dateValue), hmFmt.string(from: t2.dateValue))
         UserDefaults.standard.set(s, forKey: "workStart"); UserDefaults.standard.set(e, forKey: "workEnd")
         workHoursItem.title = T("menu.workHours", s, endText(s, e))
