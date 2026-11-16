@@ -1070,7 +1070,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
             let year = String(k.prefix(4))
             // Days to the next holiday after today, looking into next year's data too.
             let untilNext = holidays.days.keys.filter { $0 > k }.min().flatMap(dayKey.date(from:)).flatMap { Calendar.current.dateComponents([.day], from: Calendar.current.startOfDay(for: now), to: $0).day }
-            let span = holidays.years.contains(Int(year)!) ? { let ks = holidays.days.keys.filter { $0.hasPrefix(year) }; return T("status.holidaysLeft", String(ks.filter { $0 >= k }.count), String(ks.count)) + (untilNext.map { T("status.holidaysNext", String($0)) } ?? "") }() : holidaySource.isEmpty ? T("status.holidaysNotSubscribed") : T("status.holidaysNoData", year)
+            let span = holidays.years.contains(Int(year)!) ? { let ks = holidays.days.keys.filter { $0.hasPrefix(year) }; return T("status.holidaysPassed", String(ks.filter { $0 < k }.count), String(ks.count)) + (untilNext.map { T("status.holidaysNext", String($0)) } ?? "") }() : holidaySource.isEmpty ? T("status.holidaysNotSubscribed") : T("status.holidaysNoData", year)
             holidayLine.title = T("status.holidays", span)
         }
         if now >= next {
