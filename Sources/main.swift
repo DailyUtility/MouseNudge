@@ -1064,6 +1064,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     // A form row shows only while its control does, so a choice can show or hide the fields that go with it.
     func fitRows(_ grid: NSGridView) {
         for r in 0..<grid.numberOfRows { let row = grid.row(at: r); row.isHidden = row.cell(at: 1).contentView?.isHidden ?? false }
+        // The label column fits the labels of the rows shown; hidden rows would otherwise still widen it, leaving a wide gap
+        // before the fields until the next show or hide.
+        grid.column(at: 0).width = (0..<grid.numberOfRows).filter { !grid.row(at: $0).isHidden }
+            .compactMap { grid.cell(atColumnIndex: 0, rowIndex: $0).contentView?.fittingSize.width }.max() ?? 0
         // A minimum width keeps the help text above from wrapping into a tall narrow column.
         let fit = grid.fittingSize; grid.frame.size = NSSize(width: max(fit.width, 360), height: fit.height)
     }
