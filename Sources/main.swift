@@ -57,8 +57,9 @@ func saveLeaves() { let e = JSONEncoder(); e.outputFormatting = [.prettyPrinted,
 func leave(on key: String) -> Leave? { leaves.first { $0.disabled != true && $0.start <= key && key <= $0.end && $0.from == nil } }
 func partLeaves(on key: String) -> [Leave] { leaves.filter { $0.disabled != true && $0.start <= key && key <= $0.end && $0.from != nil } }
 
-// Overtime: on the days its `rule` picks (same rules as periods), between these times, nudge even on weekends, holidays
-// and leave. Times are HH:mm, end exclusive. Older entries carry a start…end date range instead of a rule.
+// Overtime: on the days its `rule` picks (same rules as periods), between these times, nudge even on weekends. A repeating
+// one skips holidays; leave (whole-day or part-day) wins over any overtime. Times are HH:mm, end exclusive. Older
+// entries carry a start…end date range instead of a rule.
 let overtimeURL = URL(fileURLWithPath: dir + "/overtime.json")
 struct Overtime: Codable, Equatable { var start: String? = nil; var end: String? = nil; var from: String; var to: String; var note: String; var rule: String?
     // A one-off ("once:") overtime may run on to `to` on this later day, all day in between.
@@ -98,23 +99,25 @@ func ruleApplies(_ rule: String?, on d: Date) -> Bool {
     default: return true
     }
 }
-// Rest periods, which apply every day the rule picks.
-func breaksOn(_ d: Date) -> [Period] { periods.filter { $0.disabled != true && $0.work != true && ruleApplies($0.rule, on: d) } }
-// A period as work time or for an app: a repeating one counts on working days only, a one-off on its own day.
-func periodSpans(_ p: Period, _ d: Date) -> [(from: String, to: String)] {
-    p.disabled != true && ruleApplies(p.rule, on: d) && (onceDay(p.rule) != nil || isWorkday(d)) ? [(p.from, p.to)] : []
+// Whether a period counts on `d`: a one-off on its own day, a repeating one on working days, and a repeating rest period
+// also on days with overtime. The nudge pauses and the tasks following it run on exactly these days.
+func periodOn(_ p: Period, _ d: Date) -> Bool {
+    p.disabled != true && ruleApplies(p.rule, on: d) && (onceDay(p.rule) != nil || isWorkday(d) || p.work != true && !overtime(on: d).isEmpty)
 }
+func breaksOn(_ d: Date) -> [Period] { periods.filter { $0.work != true && periodOn($0, d) } }
+func periodSpans(_ p: Period, _ d: Date) -> [(from: String, to: String)] { periodOn(p, d) ? [(p.from, p.to)] : [] }
 func workPeriodSpans(_ d: Date) -> [(from: String, to: String)] { periods.filter { $0.work == true }.flatMap { periodSpans($0, d) } }
 func loadJSON<T: Decodable>(_ url: URL, into v: inout T) { if let d = try? Data(contentsOf: url), let x = try? JSONDecoder().decode(T.self, from: d) { v = x } }
 func saveJSON<T: Encodable>(_ v: T, to url: URL) { let e = JSONEncoder(); e.outputFormatting = [.prettyPrinted, .sortedKeys]; try? e.encode(v).write(to: url) }
 func onceDay(_ rule: String?) -> String? { rule?.hasPrefix("once:") == true ? String(rule!.dropFirst(5)) : nil }
 func overtime(on d: Date) -> [Overtime] {
     let k = dayKey.string(from: d)
+    if leave(on: k) != nil { return [] }
     return overtimes.filter { o in
         if o.disabled == true { return false }
         if let u = o.until, let s = onceDay(o.rule) { return s <= k && k <= u }
         if let s = o.start, let e = o.end { return s <= k && k <= e }
-        return ruleApplies(o.rule, on: d)
+        return ruleApplies(o.rule, on: d) && (onceDay(o.rule) != nil || holidays.days[k] == nil)
     }
 }
 
@@ -307,7 +310,10 @@ func endText(_ from: String, _ to: String) -> String { overnight(from, to) ? T("
 func spanText(_ from: String, _ to: String) -> String { from + "–" + endText(from, to) }
 
 func inBreak(_ d: Date) -> Bool { covered(d, pausesOn) }
-func onPartLeave(_ d: Date) -> Bool { covered(d) { partLeaves(on: dayKey.string(from: $0)).map { ($0.from!, $0.to!) } } }
+// Inside part-day leave; `orEnd` also counts the minute it ends, so the end of work as leave ends is not told either.
+func onPartLeave(_ d: Date, orEnd: Bool = false) -> Bool {
+    covered(d) { partLeaves(on: dayKey.string(from: $0)).map { ($0.from!, $0.to!) } } || orEnd && onPartLeave(d - 60)
+}
 func overtimeSpans(_ d: Date) -> [(from: String, to: String)] {
     let k = dayKey.string(from: d)
     return overtime(on: d).map { o in o.until == nil ? (o.from, o.to) : (k == onceDay(o.rule) ? o.from : "00:00", k == o.until ? o.to : "24:00") }
@@ -364,7 +370,7 @@ func slot(after d: Date, now: Date) -> Date {
 // When: "at" a time on the days `rule` picks (same rules as periods; repeating ones on working days only and not in part-day leave, a one-off
 // on its date), at the "start", "end" or "both" edges of what it follows (`offset` minutes early), "every" `every` minutes
 // while inside it (not in a break unless it follows that break), or "during" it (apps: opened `lead` minutes before it
-// starts and quit `lag` minutes after it ends, each 0–240, or with `keepOpen` never quit).
+// starts and quit `lag` minutes after it ends, each 0–240, or with `keepOpen` never quit). Part-day leave holds them all.
 let jobsURL = URL(fileURLWithPath: dir + "/tasks.json")
 struct Job: Codable, Equatable {
     var id = UUID().uuidString; var disabled: Bool? = nil
@@ -418,7 +424,7 @@ func followPaused(_ f: String) -> Bool {
     }
 }
 func jobHeld(_ j: Job) -> Bool { j.when != "at" && j.action != "nudge" && follows(j).allSatisfy(followPaused) }
-func appWanted(_ j: Job, _ d: Date) -> Bool { j.action == "app" && j.disabled != true && covered(d) { appSpans(j, $0) } }
+func appWanted(_ j: Job, _ d: Date) -> Bool { j.action == "app" && j.disabled != true && !onPartLeave(d) && covered(d) { appSpans(j, $0) } }
 
 // HH:mm on a day as a moment; "24:00" is the next midnight.
 func clock(_ hm: String, on day: Date) -> Date {
@@ -483,10 +489,10 @@ func jobsDue(_ d: Date) -> [(job: Job, text: String)] {
             for f in fs {
                 let other = both && ["work", "overtime"].contains(f) ? stretches([f == "work" ? "overtime" : "work"], around: m) : []
                 for s in stretches([f], around: m) {
-                    if j.when != "end" && s.start - early == m && !other.contains(where: { $0.start < s.start && s.start < $0.end }) {
+                    if j.when != "end" && s.start - early == m && !onPartLeave(s.start, orEnd: true) && !other.contains(where: { $0.start < s.start && s.start < $0.end }) {
                         add(edgeText(j, f, end: false))
                     }
-                    if j.when != "start" && s.end - early == m && !other.contains(where: { $0.start <= s.end && s.end < $0.end }) {
+                    if j.when != "start" && s.end - early == m && !onPartLeave(s.end, orEnd: true) && !other.contains(where: { $0.start <= s.end && s.end < $0.end }) {
                         let whole = stretches(["work", "overtime"], around: m).first { $0.end == s.end }
                         let hadWork = f == "work" || whole.map { w in other.contains { w.start <= $0.start && $0.end <= w.end } } ?? false
                         add(edgeText(j, hadWork ? "work" : f, end: true))
@@ -880,18 +886,18 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         let minute = dayKey.string(from: now) + " " + hmFmt.string(from: now)
         if minute != lastReminderMinute {
             lastReminderMinute = minute
-            // Tasks every few minutes wait while paused; all pop-ups due this minute share one window.
-            let due = jobsDue(now).filter { !paused || $0.job.when != "every" }
+            // Paused, every task waits; all pop-ups due this minute share one window.
+            let due = paused ? [] : jobsDue(now)
             let pops = due.filter { $0.job.action == "notify" }.map(\.text)
             if !pops.isEmpty { showReminder(pops); appendLog(T("log.reminderShown", pops.joined(separator: T("common.listSeparator")))) }
             due.filter { $0.job.action != "notify" }.forEach { perform($0.job) }
         }
         if hmFmt.string(from: now) != lastPrune { pruneExpired() }
-        if now.timeIntervalSince(lastAppCheck) >= 10 { checkApps() }
-        // The nudge lines show only while the nudge is on; pausing also holds tasks every few minutes.
+        if !paused && now.timeIntervalSince(lastAppCheck) >= 10 { checkApps() }
+        // The nudge lines show only while the nudge is on; pausing holds the nudge and every task, apps included.
         for i in [lastLine, nextLine, nowItem] { i.isHidden = !nudging }
         permLine.isHidden = !nudging || AXIsProcessTrusted()
-        pauseItem.isHidden = !nudging && !jobs.contains { $0.disabled != true && $0.when == "every" && $0.action != "nudge" }
+        pauseItem.isHidden = !jobs.contains { $0.disabled != true }
         // With no source there is nothing to refetch or clear.
         refetchItem.isHidden = holidaySource.isEmpty; clearSourceItem.isHidden = holidaySource.isEmpty
         pauseItem.title = paused ? T("menu.resume") : T("menu.pause")
@@ -935,7 +941,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         // shortly before a break or reminder. With the nudge off it fills as the current stretch of work goes by.
         setIcon(!nudging ? workProgress(now) : paused || !counting ? 0 : 1 - Double(left) / interval)
         var title = paused ? T("status.paused") : ""
-        if let e = upcomingEvent(after: now, within: 600) {
+        if !paused, let e = upcomingEvent(after: now, within: 600) {
             let s = Int(e.at.timeIntervalSince(now).rounded(.up)), name = e.name.count > 8 ? e.name.prefix(7) + "…" : e.name
             title = name + String(format: " %d:%02d", s / 60, s % 60)
         }
@@ -1345,7 +1351,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     func jobLabel(_ j: Job) -> String {
         let names = follows(j).map(followName).joined(separator: T("common.listSeparator")), o = j.offset ?? 0
         switch j.action {
-        case "nudge": return T("job.every", names, String(j.every ?? 10)) + "  " + T("job.nudge")
+        case "nudge":
+            let when = ["work", "overtime"].map(followName) + [T("job.workPeriods")]
+            return T("job.every", when.joined(separator: T("common.listSeparator")), String(j.every ?? 10)) + "  " + T("job.nudge")
         case "app":
             let lead = j.lead ?? 0, lag = j.lag ?? 0
             let timing = j.keepOpen == true ? (lead > 0 ? T("apps.earlyNoQuit", String(lead)) : T("apps.noQuit"))

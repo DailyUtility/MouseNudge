@@ -74,10 +74,42 @@ reset()
 leaves = [Leave(start: "2026-11-16", end: "2026-11-16", note: "")]
 check("leave: whole day off", window("2026-11-16 10:00"), false)
 overtimes = [Overtime(from: "10:00", to: "11:00", note: "", rule: "once:2026-11-16")]
-check("leave: overtime still nudges", window("2026-11-16 10:30"), true)
+check("leave: wins over overtime", window("2026-11-16 10:30"), false)
+check("leave: no overtime listed", overtime(on: at("2026-11-16 10:30")).count, 0)
+leaves = [Leave(start: "2026-11-16", end: "2026-11-16", note: "", from: "10:00", to: "12:00")]
+check("part leave: wins over overtime", window("2026-11-16 10:30"), false)
 leaves = [Leave(start: "2026-11-13", end: "2026-11-13", note: "", from: "13:00", to: "15:00")]
 check("part leave: paused", window("2026-11-13 14:00"), false)
 check("part leave: back after", window("2026-11-13 15:00"), true)
+
+// Repeating overtime skips holidays, not weekends; rest periods count on days with overtime
+reset()
+overtimes = [Overtime(from: "19:00", to: "21:00", note: "", rule: "weekly:3"), Overtime(from: "10:00", to: "16:00", note: "", rule: "weekly:7")]
+holidays.days["2026-11-17"] = "Test Day"
+check("overtime: weekly skips a holiday", window("2026-11-17 20:00"), false)
+check("overtime: weekly Tuesday otherwise", window("2026-11-24 20:00"), true)
+check("overtime: weekly Saturday", window("2026-11-14 11:00"), true)
+overtimes.append(Overtime(from: "10:00", to: "12:00", note: "", rule: "once:2026-11-17"))
+check("overtime: one-off on a holiday", window("2026-11-17 11:00"), true)
+periods = [Period(id: "lunch", from: "12:00", to: "13:00", note: "lunch", rule: nil)]
+check("rest: pauses Saturday overtime", window("2026-11-14 12:30"), false)
+check("rest: not on a day off", breaksOn(at("2026-11-15 12:30")).count, 0)
+jobs = [Job(action: "notify", when: "start", follow: ["lunch"])]
+check("rest: its task on Saturday overtime", due("2026-11-14 12:00").count, 1)
+check("rest: no task on a day off", due("2026-11-15 12:00").count, 0)
+jobs = []; periods = []
+
+// Part-day leave holds edges and apps too
+reset()
+leaves = [Leave(start: "2026-11-13", end: "2026-11-13", note: "", from: "13:00", to: "18:00")]
+jobs = [Job(action: "notify", when: "both", follow: ["work"])]
+check("part leave: no end of work as leave ends", due("2026-11-13 18:00").count, 0)
+check("part leave: start of work as usual", due("2026-11-13 09:00").count, 1)
+leaves = [Leave(start: "2026-11-13", end: "2026-11-13", note: "", from: "08:00", to: "10:00")]
+check("part leave: no start of work in leave", due("2026-11-13 09:00").count, 0)
+check("part leave: app shut", appWanted(Job(action: "app", name: "A", path: "/A.app", when: "during"), at("2026-11-13 09:30")), false)
+check("part leave: app back after", appWanted(Job(action: "app", name: "A", path: "/A.app", when: "during"), at("2026-11-13 10:00")), true)
+jobs = []; leaves = []
 
 // Repeat rules (weekday 6 = Friday)
 check("rule: last Friday", ruleApplies("monthly:-1:6", on: at("2026-11-27 12:00")), true)
