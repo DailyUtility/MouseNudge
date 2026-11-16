@@ -176,17 +176,23 @@ check("apps: quit after the lag", appWanted(app, at("2026-11-13 18:15")), false)
 check("apps: Saturday off", appWanted(app, at("2026-11-14 10:00")), false)
 overtimes = [Overtime(from: "10:00", to: "12:00", note: "", rule: "once:2026-11-14")]
 check("apps: Saturday overtime", appWanted(app, at("2026-11-14 11:00")), true)
-var ot = WatchedApp(name: "B", path: "/B.app", follows: "overtime")
+var ot = WatchedApp(name: "B", path: "/B.app", follow: ["overtime"])
 check("apps: overtime only", appWanted(ot, at("2026-11-14 11:00")), true)
 check("apps: overtime only skips work hours", appWanted(ot, at("2026-11-13 10:00")), false)
 ot.disabled = true
 check("apps: turned off", appWanted(ot, at("2026-11-14 11:00")), false)
 overtimes = []
 periods = [Period(id: "m", from: "14:00", to: "15:00", note: "", rule: nil, work: true)]
-let meet = WatchedApp(name: "C", path: "/C.app", follows: "m", lead: 5, lag: 0)
+let meet = WatchedApp(name: "C", path: "/C.app", follow: ["m"], lead: 5, lag: 0)
 check("apps: period lead", appWanted(meet, at("2026-11-13 13:55")), true)
 check("apps: period over", appWanted(meet, at("2026-11-13 15:00")), false)
-check("apps: deleted period", appWanted(WatchedApp(name: "D", path: "/D.app", follows: "gone"), at("2026-11-13 14:30")), false)
+check("apps: deleted period", appWanted(WatchedApp(name: "D", path: "/D.app", follow: ["gone"]), at("2026-11-13 14:30")), false)
+overtimes = [Overtime(from: "10:00", to: "12:00", note: "", rule: "once:2026-11-14")]
+let both = WatchedApp(name: "E", path: "/E.app", follow: ["m", "overtime"])
+check("apps: several follows, period", appWanted(both, at("2026-11-13 14:30")), true)
+check("apps: several follows, overtime", appWanted(both, at("2026-11-14 11:00")), true)
+check("apps: several follows, neither", appWanted(both, at("2026-11-13 10:00")), false)
+overtimes = []
 periods = []
 reset(start: "01:00", end: "06:00")
 app = WatchedApp(name: "A", path: "/A.app", lead: 120, lag: 0)

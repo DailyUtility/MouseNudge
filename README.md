@@ -14,7 +14,7 @@ A small macOS menu bar app that nudges the mouse pointer by one pixel (and back)
 - Reminders: a pop-up at a set time, such as 10:00 stand-up or 14:00 planning (daily, weekly, monthly or one-off), plus start-of-work and end-of-work reminders, there by default, that follow your work hours and can be turned off or deleted like any other. Repeating ones ring on working days only. When adding, pick several at once from work start, work end and the start or end of your periods (these follow the period when you edit it, and go when it is deleted), or set up a custom one; the form only shows the fields that apply.
 - Each leave, overtime, period, reminder and watched app can be edited, or turned off without deleting it.
 - No clock in the menu bar: the 🖱 icon fills from the top down as the next nudge comes closer, the rest faded (faded all over off hours and while paused). A countdown appears only in the 10 minutes before a break, a named work period or a reminder. The countdown to the next nudge is in the menu, under the last one.
-- Opens and quits chosen apps on schedule. Each app follows work hours (overtime included), overtime only, or one of your periods; it opens a set number of minutes before that time starts and quits a set number of minutes after it ends (both default 0), or is only opened and never quit. Deleting a period also removes the apps that follow it.
+- Opens and quits chosen apps on schedule. Each app follows one or more of work hours (overtime included), overtime and your periods, and runs during any of them; it opens a set number of minutes before that time starts and quits a set number of minutes after it ends (both default 0), or is only opened and never quit. Deleting a period removes it from the apps that follow it, and deletes the apps that followed only that period.
 - Skips a nudge when you used the keyboard or mouse in the last minute, and when the screen is locked (can be turned on).
 - Run log, cleared every quarter by default or by hand.
 - Interface in English, 简体中文, 繁體中文, 日本語, 한국어, Bahasa Melayu, Español, Français and Deutsch. You can add your own language file from the Language menu.
@@ -114,7 +114,7 @@ Shiftbell 是一个 macOS 菜单栏小工具。在你的上班时间里，它每
 - 定时提醒：到点弹窗，比如 10:00 开会、14:00 需求会议（每天、每周、每月或单次），默认还有上班、下班提醒，跟着上班时间走，可以和其他提醒一样停用或删除。重复的提醒只在工作日响。添加时可以从上班、下班和各时段的开始、结束里一次多选（时段的提醒跟随时段，修改时段时一起改，删除时段时一起删），也可以自定义；表单只显示当前选项用得到的项。
 - 请假、加班、时段、提醒和自动开关的 App 都可以修改，也可以单独停用，不用删除。
 - 菜单栏不显示时间：🖱 图标随着下次挪动临近从上往下慢慢填满，没填到的部分是半透明的（下班和暂停时整个半透明）。只有休息、有名称的上班时段或提醒前 10 分钟才出现倒计时。下次挪动的倒计时在菜单里"上次"的下面。
-- 按时自动开关 App：每个 App 可以跟随上班时间（含加班）、只跟随加班，或跟随某个时段；开始前提前几分钟打开，结束后延后几分钟关闭（默认都是 0），也可以只开不关。删除时段时，跟随它的 App 会一起删除。
+- 按时自动开关 App：每个 App 可以多选跟随上班时间（含加班）、加班和各个时段，任一时间内都会开着；开始前提前几分钟打开，结束后延后几分钟关闭（默认都是 0），也可以只开不关。删除时段时，App 不再跟随它；只跟随这个时段的 App 会一起删除。
 - 最近一分钟内用过键盘或鼠标时不挪动。锁屏时默认也不挪，可以在菜单里打开。
 - 有运行记录，默认每季度自动清除一次，也可以手动清除。
 - 界面支持 9 种语言，还可以在"语言"菜单里添加自己的语言文件。

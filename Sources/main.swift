@@ -358,13 +358,13 @@ func slot(after d: Date, now: Date) -> Date {
     return t
 }
 
-// Apps opened for a stretch of time and quit after it. Each follows work hours (with overtime), overtime alone or a
-// period: opened `lead` minutes before it starts and quit `lag` minutes after it ends (each 0–240, default 0), or, with
+// Apps opened for a stretch of time and quit after it. Each follows one or more of work hours (with overtime), overtime
+// alone and periods, and is wanted during any of them: opened `lead` minutes before it starts and quit `lag` minutes after it ends (each 0–240, default 0), or, with
 // `keepOpen`, never quit. Breaks and pausing don't close an app that follows work hours.
 let appsURL = URL(fileURLWithPath: dir + "/apps.json")
 struct WatchedApp: Codable, Equatable { var name: String; var path: String; var bundleID: String?; var disabled: Bool? = nil
-    // "work" (or nil) for work hours, "overtime", or a period's id.
-    var follows: String? = nil; var lead: Int? = nil; var lag: Int? = nil; var keepOpen: Bool? = nil }
+    // Each "work" for work hours, "overtime", or a period's id; nil means work hours.
+    var follow: [String]? = nil; var lead: Int? = nil; var lag: Int? = nil; var keepOpen: Bool? = nil }
 var watchedApps: [WatchedApp] = []
 func minutesOf(_ hm: String) -> Int { let p = hm.split(separator: ":").compactMap { Int($0) }; return p.count == 2 ? p[0] * 60 + p[1] : 0 }
 func hmOf(_ m: Int) -> String { String(format: "%02d:%02d", m / 60 % 24, m % 60) }
@@ -376,12 +376,14 @@ func widened(_ s: (from: String, to: String), lead: Int, lag: Int) -> (from: Str
     let end = minutesOf(s.to) + (overnight(s.from, s.to) ? 1440 : 0) + lag
     return (hmOf(from), hmOf(min(from + 1439, end) % 1440))
 }
+func follows(_ a: WatchedApp) -> [String] { a.follow ?? ["work"] }
 func appSpans(_ a: WatchedApp, _ d: Date) -> [(from: String, to: String)] {
-    let spans: [(from: String, to: String)]
-    switch a.follows ?? "work" {
-    case "work": spans = workSpans(d) + overtimeSpans(d)
-    case "overtime": spans = overtimeSpans(d)
-    case let id: spans = periods.first { $0.id == id }.map { periodSpans($0, d) } ?? []
+    let spans = follows(a).flatMap { f -> [(from: String, to: String)] in
+        switch f {
+        case "work": return workSpans(d) + overtimeSpans(d)
+        case "overtime": return overtimeSpans(d)
+        case let id: return periods.first { $0.id == id }.map { periodSpans($0, d) } ?? []
+        }
     }
     return spans.map { widened($0, lead: a.lead ?? 0, lag: a.lag ?? 0) }
 }
@@ -604,7 +606,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     var online = false
     var autoFetchFailed: Date?
     var languagesWatch: DispatchSourceFileSystemObject?
-    // Watched apps are checked every few seconds; whether each entry (appKey) wanted its app at the last check.
+    // Watched apps are checked every few seconds; whether each app (by path) was wanted at the last check.
     // Missing until the first check, so launching after hours closes nothing.
     var appWasWanted: [String: Bool] = [:]
     var lastAppCheck = Date.distantPast
@@ -1231,10 +1233,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         saveJSON(periods, to: periodsURL); rebuildPeriodMenu(); rebuildAppsMenu(); rebuildReminderMenu(); saveJSON(reminders, to: remindersURL)
         replan(); checkApps()
     }
-    // Apps and reminders following a period go with it.
+    // Reminders following a period go with it, and so do apps that follow nothing else.
     func removePeriod(_ i: Int) {
         guard periods.indices.contains(i) else { return }
-        let p = periods[i], bound = watchedApps.filter { $0.follows == p.id }.map(\.name)
+        let p = periods[i], bound = watchedApps.filter { follows($0) == [p.id] }.map(\.name)
         let rings = reminders.filter { $0.period == p.id }.map(reminderText)
         func list(_ key: String, _ names: [String]) -> String { names.isEmpty ? "" : "\n\n" + T(key, names.joined(separator: T("common.listSeparator"))) }
         guard confirmRemove(T("confirm.deletePeriod"), periodLabel(p) + list("period.deleteApps", bound) + list("period.deleteReminders", rings)) else { return }
@@ -1323,8 +1325,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         NSApp.activate(ignoringOtherApps: true); a.window.makeKeyAndOrderFront(nil)
     }
 
-    func followName(_ follows: String?) -> String {
-        switch follows ?? "work" {
+    func followName(_ f: String) -> String {
+        switch f {
         case "work": return T("apps.followWork")
         case "overtime": return T("section.overtime")
         case let id: return periods.first { $0.id == id }.map { $0.note.isEmpty ? spanText($0.from, $0.to) : $0.note + " " + spanText($0.from, $0.to) } ?? T("apps.periodGone")
@@ -1334,9 +1336,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         let lead = a.lead ?? 0, lag = a.lag ?? 0
         let timing = a.keepOpen == true ? (lead > 0 ? T("apps.earlyNoQuit", String(lead)) : T("apps.noQuit"))
             : lead + lag > 0 ? T("apps.timing", String(lead), String(lag)) : ""
-        return a.name + "  " + followName(a.follows) + (timing.isEmpty ? "" : T("common.paren", timing))
+        return a.name + "  " + follows(a).map(followName).joined(separator: T("common.listSeparator")) + (timing.isEmpty ? "" : T("common.paren", timing))
     }
-    func appKey(_ a: WatchedApp) -> String { a.path + "|" + (a.follows ?? "work") }
     func rebuildAppsMenu() {
         fill(appsRoot, watchedApps.map { (appLabel($0), $0.disabled == true) }, toggle: { [unowned self] i in
             defer { saveJSON(watchedApps, to: appsURL); checkApps() }; return flip(&watchedApps[i].disabled, appLabel(watchedApps[i]))
@@ -1350,29 +1351,32 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         guard p.runModal() == .OK, !p.urls.isEmpty else { return }
         let names = p.urls.map { $0.deletingPathExtension().lastPathComponent }
         guard let rule = appRule(T("apps.ruleTitle", names.joined(separator: T("common.listSeparator"))), nil) else { return }
-        // The same app can follow several times; the same app and time again only updates the minutes.
+        // An app is listed once; adding it again replaces what it follows and its minutes.
         for (url, name) in zip(p.urls, names) {
             var a = rule; a.name = name; a.path = url.path; a.bundleID = Bundle(url: url)?.bundleIdentifier
-            if let i = watchedApps.firstIndex(where: { appKey($0) == appKey(a) }) { watchedApps[i] = a } else { watchedApps.append(a) }
+            if let i = watchedApps.firstIndex(where: { $0.path == a.path }) { watchedApps[i] = a } else { watchedApps.append(a) }
             appendLog(T("log.appAdded", appLabel(a)))
         }
         saveJSON(watchedApps, to: appsURL); rebuildAppsMenu(); checkApps()
     }
-    // Changes what an app follows and its minutes; another entry left with the same app and time is merged into it.
+    // Changes what an app follows and its minutes; any other entry left for the same app is merged into it.
     func editApp(_ old: WatchedApp) {
         guard var a = appRule(T("edit.app", old.name), old) else { return }
         a.name = old.name; a.path = old.path; a.bundleID = old.bundleID; a.disabled = old.disabled
-        watchedApps.removeAll { $0 != old && appKey($0) == appKey(a) }
+        watchedApps.removeAll { $0 != old && $0.path == a.path }
         put(a, over: old, in: &watchedApps, label: appLabel, added: "log.appAdded")
         saveJSON(watchedApps, to: appsURL); rebuildAppsMenu(); checkApps()
     }
     // The form for what apps follow, filled in from `old` when editing; returns the choice as an entry with no app set.
     func appRule(_ title: String, _ old: WatchedApp?) -> WatchedApp? {
-        // A turned-off or deleted period stays on the list while it is the one being edited.
-        let shown = periods.filter { $0.disabled != true || $0.id == old?.follows }
+        // Any number of times can be ticked. A turned-off or deleted period stays on the list while the app follows it.
+        let picked = old.map(follows) ?? ["work"]
+        let shown = periods.filter { $0.disabled != true || picked.contains($0.id) }
         var choices: [String] = ["work", "overtime"] + shown.map(\.id), titles = [T("apps.followWork"), T("section.overtime")] + shown.map(periodLabel)
-        if let f = old?.follows, !choices.contains(f) { choices.append(f); titles.append(T("apps.periodGone")) }
-        let follow = NSPopUpButton(); follow.addItems(withTitles: titles); follow.selectItem(at: choices.firstIndex(of: old?.follows ?? "work") ?? 0)
+        for f in picked where !choices.contains(f) { choices.append(f); titles.append(T("apps.periodGone")) }
+        let boxes = titles.map { NSButton(checkboxWithTitle: $0, target: nil, action: nil) }
+        zip(choices, boxes).forEach { $1.state = picked.contains($0) ? .on : .off }
+        let follow = NSStackView(views: boxes); follow.orientation = .vertical; follow.alignment = .leading; follow.spacing = 4
         let lead = noteField(), lag = noteField(), quit = NSButton(checkboxWithTitle: T("apps.autoQuit"), target: nil, action: nil)
         lead.stringValue = String(old?.lead ?? 0); lag.stringValue = String(old?.lag ?? 0); quit.state = old?.keepOpen == true ? .off : .on
         // Minutes late only matter when the app is quit.
@@ -1382,9 +1386,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         func minutes(_ f: NSTextField) -> Int? { Int(f.stringValue.trimmingCharacters(in: .whitespaces)).flatMap { (0...240).contains($0) ? $0 : nil } }
         guard form(title, T("apps.ruleHelp"), [(T("form.follow"), follow), (T("form.openEarly"), lead), (T("form.quit"), quit), (T("form.closeLate"), lag)],
                    button: old == nil ? nil : T("common.save"),
-                   check: { minutes(lead) != nil && (quit.state == .off || minutes(lag) != nil) ? nil : T("appTimes.invalid") }) else { return nil }
+                   check: { !boxes.contains { $0.state == .on } ? T("error.pickOne")
+                        : minutes(lead) != nil && (quit.state == .off || minutes(lag) != nil) ? nil : T("appTimes.invalid") }) else { return nil }
         let keep = quit.state == .off
-        return WatchedApp(name: "", path: "", follows: choices[follow.indexOfSelectedItem],
+        return WatchedApp(name: "", path: "", follow: zip(choices, boxes).filter { $1.state == .on }.map(\.0),
                           lead: minutes(lead), lag: keep ? nil : minutes(lag), keepOpen: keep ? true : nil)
     }
     func removeApp(_ i: Int) {
@@ -1393,9 +1398,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         appendLog(T("log.appDeleted", appLabel(a)))
     }
     func dropFollowers(of p: Period) {
-        let gone = watchedApps.filter { $0.follows == p.id }, rings = reminders.filter { $0.period == p.id }
-        if !gone.isEmpty {
-            watchedApps.removeAll { $0.follows == p.id }; saveJSON(watchedApps, to: appsURL); rebuildAppsMenu()
+        // Apps stop following it; an app left following nothing is deleted.
+        let gone = watchedApps.filter { follows($0) == [p.id] }, rings = reminders.filter { $0.period == p.id }
+        if watchedApps.contains(where: { follows($0).contains(p.id) }) {
+            watchedApps = watchedApps.filter { follows($0) != [p.id] }.map { var a = $0; a.follow = a.follow?.filter { $0 != p.id }; return a }
+            saveJSON(watchedApps, to: appsURL); rebuildAppsMenu()
             gone.forEach { appendLog(T("log.appDeleted", $0.name)) }
         }
         if !rings.isEmpty {
@@ -1404,18 +1411,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         }
     }
     // Opens any watched app that isn't running while it is wanted (a failed launch is retried after a minute), and
-    // quits it once when its time ends; an app opened by hand outside its time is left alone. Entries for the same app
-    // go together: it is wanted while any of them wants it, and is quit when the last ends, unless each entry that just
-    // ended keeps it open.
+    // quits it once when its time ends, unless it keeps it open; an app opened by hand outside its time is left alone.
     func checkApps() {
         let now = Date(); lastAppCheck = now
         let running = NSWorkspace.shared.runningApplications
-        for path in Set(watchedApps.map(\.path)) {
-            let group = watchedApps.filter { $0.path == path }, a = group[0]
-            let ended = group.filter { $0.disabled != true && appWasWanted[appKey($0)] == true }
-            let wanted = group.contains { appWanted($0, now) }
-            group.forEach { appWasWanted[appKey($0)] = appWanted($0, now) }
-            let ending = !wanted && ended.contains { $0.keepOpen != true }
+        for a in watchedApps {
+            let wanted = appWanted(a, now)
+            let ending = !wanted && a.disabled != true && a.keepOpen != true && appWasWanted[a.path] == true
+            appWasWanted[a.path] = wanted
             guard wanted || ending else { continue }
             let mine = running.filter { $0.bundleURL?.path == a.path || (a.bundleID != nil && $0.bundleIdentifier == a.bundleID) }
             if ending {
