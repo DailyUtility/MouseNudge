@@ -10,10 +10,10 @@ A small macOS menu bar app that nudges the mouse pointer by one pixel (and back)
 - Night shifts: a stretch like 22:00–06:00 belongs to the day it starts on.
 - Public holidays from any iCalendar subscription (`.ics` or `webcal://`, e.g. a holiday calendar from Apple Calendar or officeholidays.com). None is set by default, so only weekends are days off until you add one under **More → Subscribe to Holiday Calendar**.
 - Overtime (one day, several days in a row, or repeating), periods (daily, weekly, monthly, one-off), and leave (whole days or part of a day). Monthly goes by weekday (1st to 5th or last) or by date (a day of the month, the last day, or N days from the end), for overtime, periods and reminders alike.
-- A period is either a break (lunch, a tea break: no nudging) or work (a meeting, focus time: counts as work hours, even outside them). Repeating periods apply on working days only.
+- A period is either away (lunch, a tea break: time away from your desk, no nudging) or working (a meeting, focus time: counts as work hours, even outside them). Repeating periods apply on working days only.
 - Reminders: a pop-up at a set time, such as 10:00 stand-up or 14:00 planning (daily, weekly, monthly or one-off), plus start-of-work and end-of-work reminders, there by default, that follow your work hours and can be turned off or deleted like any other. Repeating ones ring on working days only. When adding, pick several at once from work start, work end and the start or end of your periods (these follow the period when you edit it, and go when it is deleted), or set up a custom one; the form only shows the fields that apply.
 - Each leave, overtime, period, reminder and watched app can be edited, or turned off without deleting it.
-- No clock in the menu bar: the 🖱 icon fills from the top down as the next nudge comes closer, the rest faded (faded all over off hours and while paused). A countdown appears only in the 10 minutes before a break, a named work period or a reminder. The countdown to the next nudge is in the menu, under the last one.
+- No clock in the menu bar: the 🖱 icon fills from the top down as the next nudge comes closer, the rest faded (faded all over off hours and while paused). A countdown appears only in the 10 minutes before an away period, a named working period or a reminder. The countdown to the next nudge is in the menu, under the last one.
 - Opens and quits chosen apps on schedule. Each app follows one or more of work hours (overtime included), overtime and your periods, and runs during any of them; it opens a set number of minutes before that time starts and quits a set number of minutes after it ends (both default 0), or is only opened and never quit. Deleting a period removes it from the apps that follow it, and deletes the apps that followed only that period.
 - Skips a nudge when you used the keyboard or mouse in the last minute, and when the screen is locked (can be turned on).
 - Run log, cleared every quarter by default or by hand.
@@ -110,10 +110,10 @@ Shiftbell 是一个 macOS 菜单栏小工具。在你的上班时间里，它每
 - 支持夜班：像 22:00–06:00 这样跨午夜的时段，算在开始的那一天。
 - 节假日来自任意日历订阅（`.ics` 或 `webcal://`，例如 Apple 日历里的节假日日历，或 officeholidays.com）。默认不设置，这时只排除周末；在"更多 → 订阅假期日历"里设置。
 - 支持加班（单天、连续多天、或重复）、时段（每天、每周、每月、单次）和请假（整天或几个小时）。每月可以按星期（第一到第五个或最后一个星期几），也可以按日期（几号、最后一天或倒数第几天），加班、时段和提醒都一样。
-- 时段分两类：休息（午饭、下午茶这类离开的时间，不挪动）和上班（会议、专注这类时间，算上班时间，即使在上班时间之外）。重复的时段只在工作日生效。
+- 时段分两类：暂离（午饭、下午茶这类离开工位的时间，不挪动）和工作中（会议、专注这类时间，算上班时间，即使在上班时间之外）。重复的时段只在工作日生效。
 - 定时提醒：到点弹窗，比如 10:00 开会、14:00 需求会议（每天、每周、每月或单次），默认还有上班、下班提醒，跟着上班时间走，可以和其他提醒一样停用或删除。重复的提醒只在工作日响。添加时可以从上班、下班和各时段的开始、结束里一次多选（时段的提醒跟随时段，修改时段时一起改，删除时段时一起删），也可以自定义；表单只显示当前选项用得到的项。
 - 请假、加班、时段、提醒和自动开关的 App 都可以修改，也可以单独停用，不用删除。
-- 菜单栏不显示时间：🖱 图标随着下次挪动临近从上往下慢慢填满，没填到的部分是半透明的（下班和暂停时整个半透明）。只有休息、有名称的上班时段或提醒前 10 分钟才出现倒计时。下次挪动的倒计时在菜单里"上次"的下面。
+- 菜单栏不显示时间：🖱 图标随着下次挪动临近从上往下慢慢填满，没填到的部分是半透明的（下班和暂停时整个半透明）。只有暂离时段、有名称的工作中时段或提醒前 10 分钟才出现倒计时。下次挪动的倒计时在菜单里"上次"的下面。
 - 按时自动开关 App：每个 App 可以多选跟随上班时间（含加班）、加班和各个时段，任一时间内都会开着；开始前提前几分钟打开，结束后延后几分钟关闭（默认都是 0），也可以只开不关。删除时段时，App 不再跟随它；只跟随这个时段的 App 会一起删除。
 - 最近一分钟内用过键盘或鼠标时不挪动。锁屏时默认也不挪，可以在菜单里打开。
 - 有运行记录，默认每季度自动清除一次，也可以手动清除。
