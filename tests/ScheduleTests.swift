@@ -182,6 +182,21 @@ check("task: no overtime end at the join", due("2026-11-13 09:00").count, 1)
 overtimes = [Overtime(from: "10:00", to: "12:00", note: "", rule: "once:2026-11-14")]
 check("task: Saturday overtime alone ends as overtime", due("2026-11-14 12:00"), [otEnd])
 check("task: work hours alone default to both", follows(Job(action: "notify", when: "start")), ["work", "overtime"])
+overtimes = [Overtime(from: "17:00", to: "20:00", note: "", rule: "once:2026-11-13")]
+check("task: overlap, no overtime start inside work", due("2026-11-13 17:00").count, 0)
+check("task: overlap, overtime starts as work ends", due("2026-11-13 18:00"), [otStart])
+check("task: overlap, end of work after the overtime", due("2026-11-13 20:00"), [T("reminder.workEnd")])
+overtimes = [Overtime(from: "07:00", to: "10:00", note: "", rule: "once:2026-11-13")]
+check("task: morning overlap, work still starts", due("2026-11-13 09:00"), [T("reminder.workStart")])
+check("task: morning overlap, no overtime end", due("2026-11-13 10:00").count, 0)
+jobs = [Job(action: "notify", when: "both", follow: ["overtime"])]
+overtimes = [Overtime(from: "09:00", to: "15:00", note: "", rule: "once:2026-11-13", until: "2026-11-16")]
+leaves = [Leave(start: "2026-11-14", end: "2026-11-14", note: "")]
+check("task: no end at midnight before a leave day", due("2026-11-14 00:00").count, 0)
+check("task: no start at midnight after a leave day", due("2026-11-15 00:00").count, 0)
+check("task: several days still start", due("2026-11-13 09:00"), [otStart])
+check("task: several days still end", due("2026-11-16 15:00"), [otEnd])
+leaves = []
 overtimes = []
 jobs = defaultJobs(nudging: true, interval: 15)
 reset(start: "22:00", end: "06:00")
@@ -233,7 +248,30 @@ check("every: not on Saturday", due("2026-11-14 10:30").count, 0)
 check("every: quiet in a break", due("2026-11-13 12:30").count, 0)
 jobs = [Job(action: "notify", text: "stretch", when: "every", follow: ["lunch"], every: 30)]
 check("every: inside the break it follows", due("2026-11-13 12:30"), ["stretch"])
+leaves = [Leave(start: "2026-11-13", end: "2026-11-13", note: "", from: "12:00", to: "14:00")]
+check("every: part leave over the break it follows", due("2026-11-13 12:30").count, 0)
+leaves = []
+periods = [Period(id: "mtg", from: "10:00", to: "11:00", note: "", rule: "once:2026-11-13", work: true)]
+jobs = [Job(action: "notify", when: "start", follow: ["mtg"])]
+check("leave: one-off period still on", due("2026-11-13 10:00").count, 1)
+leaves = [Leave(start: "2026-11-13", end: "2026-11-13", note: "")]
+check("leave: one-off period off", due("2026-11-13 10:00").count, 0)
+check("leave: one-off work period no nudge", window("2026-11-13 10:30"), false)
+leaves = []
 jobs = []; periods = []
+
+// What a pause or sleep missed
+reset()
+jobs = [Job(action: "notify", text: "standup", when: "at", at: "10:00"), Job(action: "notify", text: "water", when: "every", every: 60),
+        Job(action: "url", text: "https://example.com", when: "at", at: "11:00", rule: "once:2026-11-13")]
+let slept = dueBetween(after: at("2026-11-13 09:30"), upTo: at("2026-11-13 12:00"))
+check("missed: every due minute", slept.map { show($0.at) }, ["2026-11-13 10:00", "2026-11-13 10:00", "2026-11-13 11:00", "2026-11-13 11:00", "2026-11-13 12:00"])
+check("missed: starts after the last minute seen", dueBetween(after: at("2026-11-13 10:00"), upTo: at("2026-11-13 10:30")).count, 0)
+check("missed: lines", missedLines(slept.map { ($0.at, $0.text) }, now: at("2026-11-13 12:01")),
+      ["10:00  standup", "10:00–12:00 ×3  water", "11:00  https://example.com"])
+check("missed: another day shows the date", missedLines([(at("2026-11-13 10:00"), "x")], now: at("2026-11-16 09:00")).first?.hasSuffix("  x"), true)
+check("missed: at most a week back", dueBetween(after: at("2026-10-01 00:00"), upTo: at("2026-11-13 12:00")).first.map { $0.at >= at("2026-11-06 12:00") }, true)
+jobs = []
 
 // How far through work, for the menu bar icon
 reset()

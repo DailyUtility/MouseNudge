@@ -100,9 +100,10 @@ func ruleApplies(_ rule: String?, on d: Date) -> Bool {
     }
 }
 // Whether a period counts on `d`: a one-off on its own day, a repeating one on working days, and a repeating rest period
-// also on days with overtime. The nudge pauses and the tasks following it run on exactly these days.
+// also on days with overtime; never on a day of leave. The nudge pauses and the tasks following it run on exactly these days.
 func periodOn(_ p: Period, _ d: Date) -> Bool {
-    p.disabled != true && ruleApplies(p.rule, on: d) && (onceDay(p.rule) != nil || isWorkday(d) || p.work != true && !overtime(on: d).isEmpty)
+    p.disabled != true && ruleApplies(p.rule, on: d) && leave(on: dayKey.string(from: d)) == nil
+        && (onceDay(p.rule) != nil || isWorkday(d) || p.work != true && !overtime(on: d).isEmpty)
 }
 func breaksOn(_ d: Date) -> [Period] { periods.filter { $0.work != true && periodOn($0, d) } }
 func periodSpans(_ p: Period, _ d: Date) -> [(from: String, to: String)] { periodOn(p, d) ? [(p.from, p.to)] : [] }
@@ -477,31 +478,76 @@ func jobsDue(_ d: Date) -> [(job: Job, text: String)] {
             if j.at == hm && ruleApplies(j.rule, on: m) && (onceDay(j.rule) != nil || j.anyDay == true || isWorkday(m) && !onPartLeave(m)) { add(j.text.isEmpty ? T("reminder.untitled", hm) : j.text) }
         case "every":
             let n = j.every ?? 0
-            guard n > 0, minutesOf(hm) % n == 0, covered(m, { jobSpans(j, $0) }) else { continue }
+            guard n > 0, minutesOf(hm) % n == 0, !onPartLeave(m), covered(m, { jobSpans(j, $0) }) else { continue }
             let rests = follows(j).compactMap { id in periods.first { $0.id == id && $0.work != true } }
             if inBreak(m) && !covered(m, { d in rests.flatMap { periodSpans($0, d) } }) { continue }
             add(j.text.isEmpty ? T("reminder.untitled", hm) : j.text)
         default:
             let early = TimeInterval((j.offset ?? 0) * 60)
             // Work and overtime followed together: where one runs on into the other only the start of the next is
-            // told (overtime starting as work ends), and the end of the whole stretch is the end of work if it had any.
+            // told, and the end of the whole stretch is the end of work if it had any. Work comes first: its start is told
+            // even inside overtime, and overtime that began during work is told to start as work ends.
             let fs = follows(j), both = fs.contains("work") && fs.contains("overtime")
             for f in fs {
                 let other = both && ["work", "overtime"].contains(f) ? stretches([f == "work" ? "overtime" : "work"], around: m) : []
                 for s in stretches([f], around: m) {
-                    if j.when != "end" && s.start - early == m && !onPartLeave(s.start, orEnd: true) && !other.contains(where: { $0.start < s.start && s.start < $0.end }) {
+                    if j.when != "end" && s.start - early == m && !onPartLeave(s.start, orEnd: true) && !cutByLeave(s.start, end: false)
+                        && (f == "work" || !other.contains(where: { $0.start < s.start && s.start < $0.end })) {
                         add(edgeText(j, f, end: false))
                     }
-                    if j.when != "start" && s.end - early == m && !onPartLeave(s.end, orEnd: true) && !other.contains(where: { $0.start <= s.end && s.end < $0.end }) {
+                    guard s.end - early == m && !onPartLeave(s.end, orEnd: true) && !cutByLeave(s.end, end: true) else { continue }
+                    if !other.contains(where: { $0.start <= s.end && s.end < $0.end }) {
+                        guard j.when != "start" else { continue }
                         let whole = stretches(["work", "overtime"], around: m).first { $0.end == s.end }
                         let hadWork = f == "work" || whole.map { w in other.contains { w.start <= $0.start && $0.end <= w.end } } ?? false
                         add(edgeText(j, hadWork ? "work" : f, end: true))
+                    } else if f == "work" && j.when != "end" && other.contains(where: { $0.start < s.end && s.end < $0.end }) {
+                        add(edgeText(j, "overtime", end: false))
                     }
                 }
             }
         }
     }
     return due
+}
+
+// A midnight edge that is only there because the next day (for an end) or the day before (for a start) is whole-day
+// leave, as when overtime over several days has a day of leave in the middle: no pop-up in the night for it.
+func cutByLeave(_ t: Date, end: Bool) -> Bool {
+    let c = Calendar.current
+    guard c.startOfDay(for: t) == t else { return false }
+    return leave(on: dayKey.string(from: end ? t : dayBefore(t))) != nil
+}
+// Every task due after `from` up to `to` (whole minutes, at most a week back), with the minute it was due: what a
+// pause, sleep or a quit Mac missed.
+func dueBetween(after from: Date, upTo to: Date) -> [(at: Date, job: Job, text: String)] {
+    let c = Calendar.current, first = max(c.dateInterval(of: .minute, for: from)!.start, to - 7 * 86400) + 60
+    // Only the minutes when a task can be due are checked: its time, its marks, or an edge of what it follows.
+    var minutes = Set<Date>(), day = c.startOfDay(for: first)
+    while day <= to {
+        for j in jobs where j.disabled != true && !["nudge", "app"].contains(j.action) {
+            switch j.when {
+            case "at": if let a = j.at { minutes.insert(clock(a, on: day)) }
+            case "every": if let n = j.every, n > 0 { for k in stride(from: 0, to: 1440, by: n) { minutes.insert(clock(hmOf(k), on: day)) } }
+            default:
+                let early = TimeInterval((j.offset ?? 0) * 60)
+                for f in follows(j) { for s in stretches([f], around: day) { minutes.formUnion([s.start - early, s.end - early]) } }
+            }
+        }
+        day = c.date(byAdding: .day, value: 1, to: day)!
+    }
+    return minutes.filter { first <= $0 && $0 <= to }.sorted().flatMap { m in jobsDue(m).map { (m, $0.job, $0.text) } }
+}
+// Missed tasks as pop-up lines: each task once, with the time it was due (and the date if not today), or the first and
+// last time and how often when it came round several times.
+func missedLines(_ missed: [(at: Date, text: String)], now: Date) -> [String] {
+    var order: [String] = [], times: [String: [Date]] = [:]
+    for x in missed { if times[x.text] == nil { order.append(x.text) }; times[x.text, default: []].append(x.at) }
+    func when(_ d: Date) -> String { Calendar.current.isDate(d, inSameDayAs: now) ? hmFmt.string(from: d) : localFmt("MdHHmm").string(from: d) }
+    return order.map { t in
+        let ds = times[t]!
+        return ds.count == 1 ? when(ds[0]) + "  " + t : when(ds[0]) + "–" + when(ds.last!) + " ×\(ds.count)  " + t
+    }
 }
 
 // The nearest break start, named work period start or timed pop-up in the minutes after `d` (up to `within` seconds
@@ -673,6 +719,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     // The last run's time and result key, kept so the line can be retitled in another language.
     var lastRun: (time: String, result: String)?
     var paused = UserDefaults.standard.bool(forKey: "paused")
+    // Tasks due while paused, asleep or with the app quit, kept across restarts until they are shown together.
+    var missed: [(at: Date, text: String)] = (UserDefaults.standard.stringArray(forKey: "missed") ?? []).compactMap { s in
+        let p = s.split(separator: "\t", maxSplits: 1)
+        return p.count == 2 ? Double(p[0]).map { (Date(timeIntervalSince1970: $0), String(p[1])) } : nil
+    }
+    // The last minute looked at, so the minutes slept through are known.
+    var lastSeen = UserDefaults.standard.object(forKey: "lastSeen") as? Date
     var next = Date.distantFuture
     var fetching = false
     // Holidays are only fetched online; coming back online checks again. A failed automatic fetch waits an hour.
@@ -720,6 +773,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
             jobs = defaultJobs(nudging: UserDefaults.standard.bool(forKey: "workRemindersAdded"), interval: (1...240).contains(v) ? v : 10); saveJSON(jobs, to: jobsURL)
         }
         applyNudge()
+        catchUp(Date())
         pruneExpired()
         holidayLine.title = T("status.holidaysLoading")
         retitle()
@@ -881,16 +935,39 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         if !r.isEmpty { jobs.removeAll(where: done); saveJSON(jobs, to: jobsURL); rebuildTasksMenu(); r.forEach { appendLog(T("log.taskExpired", jobLabel($0))) } }
     }
 
+    func saveMissed() { UserDefaults.standard.set(missed.map { "\($0.at.timeIntervalSince1970)\t\($0.text)" }, forKey: "missed") }
+    // A missed pop-up by its text; any other task by what it does, marked as not run.
+    func missedText(_ j: Job, _ text: String) -> String { j.action == "notify" ? text : jobLabel(j) + T("common.paren", T("reminder.notRun")) }
+    // Notes what came due in the minutes between the last one looked at and `now` (asleep, or the app quit), before
+    // pruning drops one-off tasks whose time has passed.
+    func catchUp(_ now: Date) {
+        let m = Calendar.current.dateInterval(of: .minute, for: now)!.start
+        if let l = lastSeen, m.timeIntervalSince(l) > 60 {
+            let due = dueBetween(after: l, upTo: m - 60)
+            if !due.isEmpty { missed += due.map { ($0.at, missedText($0.job, $0.text)) }; saveMissed() }
+        }
+        lastSeen = m; UserDefaults.standard.set(m, forKey: "lastSeen")
+    }
+
     func tick() {
         let now = Date()
         let minute = dayKey.string(from: now) + " " + hmFmt.string(from: now)
         if minute != lastReminderMinute {
             lastReminderMinute = minute
-            // Paused, every task waits; all pop-ups due this minute share one window.
-            let due = paused ? [] : jobsDue(now)
-            let pops = due.filter { $0.job.action == "notify" }.map(\.text)
-            if !pops.isEmpty { showReminder(pops); appendLog(T("log.reminderShown", pops.joined(separator: T("common.listSeparator")))) }
-            due.filter { $0.job.action != "notify" }.forEach { perform($0.job) }
+            catchUp(now)
+            // Paused, every task waits and is only listed on resume; all pop-ups due this minute share one window.
+            let due = jobsDue(now)
+            if paused { missed += due.map { (now, missedText($0.job, $0.text)) }; saveMissed() }
+            else {
+                let pops = due.filter { $0.job.action == "notify" }.map(\.text)
+                if !pops.isEmpty { showReminder(pops); appendLog(T("log.reminderShown", pops.joined(separator: T("common.listSeparator")))) }
+                due.filter { $0.job.action != "notify" }.forEach { perform($0.job) }
+            }
+        }
+        if !paused && !missed.isEmpty {
+            let lines = missedLines(missed, now: now)
+            showReminder(lines, title: T("reminder.missed")); appendLog(T("log.missedShown", lines.joined(separator: T("common.listSeparator"))))
+            missed = []; saveMissed()
         }
         if hmFmt.string(from: now) != lastPrune { pruneExpired() }
         if !paused && now.timeIntervalSince(lastAppCheck) >= 10 { checkApps() }
@@ -1325,8 +1402,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     }
 
     // A floating pop-up that does not block the menu bar timer; several can be open at once.
-    func showReminder(_ lines: [String]) {
-        let a = NSAlert(); a.messageText = T("reminder.title", hmFmt.string(from: Date())); a.informativeText = lines.joined(separator: "\n")
+    func showReminder(_ lines: [String], title: String? = nil) {
+        let a = NSAlert(); a.messageText = title ?? T("reminder.title", hmFmt.string(from: Date())); a.informativeText = lines.joined(separator: "\n")
         a.icon = NSImage(systemSymbolName: "bell.fill", accessibilityDescription: nil)
         let ok = a.addButton(withTitle: T("common.ok"))
         let close = ClosureTarget { [weak self, weak a] in
