@@ -47,13 +47,16 @@ check("holiday: morning after the night before", window("2026-11-17 03:00"), tru
 check("holiday: holiday night off", window("2026-11-17 23:00"), false)
 check("holiday: morning after the holiday night", window("2026-11-18 03:00"), false)
 
-// Rest periods across midnight
+// Periods the nudge is quiet in, across midnight
 reset(start: "22:00", end: "06:00")
-periods = [Period(from: "23:30", to: "00:30", note: "", rule: nil)]
+periods = [Period(id: "late", from: "23:30", to: "00:30", note: "", rule: nil)]
+check("period: no pause unless the nudge skips it", window("2026-11-13 23:45"), true)
+jobs = [Job(action: "nudge", when: "every", every: 10, skip: ["late"])]
 check("break: before midnight", window("2026-11-13 23:45"), false)
 check("break: after midnight", window("2026-11-14 00:15"), false)
 check("break: over", window("2026-11-14 00:45"), true)
 check("break: next start is the break end", show(nextStart(after: at("2026-11-13 23:40"))), "2026-11-14 00:30")
+jobs = []
 
 // Overtime, one day and several days
 reset()
@@ -92,8 +95,9 @@ check("overtime: weekly Saturday", window("2026-11-14 11:00"), true)
 overtimes.append(Overtime(from: "10:00", to: "12:00", note: "", rule: "once:2026-11-17"))
 check("overtime: one-off on a holiday", window("2026-11-17 11:00"), true)
 periods = [Period(id: "lunch", from: "12:00", to: "13:00", note: "lunch", rule: nil)]
+jobs = [Job(action: "nudge", when: "every", every: 10, skip: ["lunch"])]
 check("rest: pauses Saturday overtime", window("2026-11-14 12:30"), false)
-check("rest: not on a day off", breaksOn(at("2026-11-15 12:30")).count, 0)
+check("rest: not on a day off", skipsOn(nudgeJob, at("2026-11-15 12:30")).count, 0)
 jobs = [Job(action: "notify", when: "start", follow: ["lunch"])]
 check("rest: its task on Saturday overtime", due("2026-11-14 12:00").count, 1)
 check("rest: no task on a day off", due("2026-11-15 12:00").count, 0)
@@ -245,18 +249,23 @@ check("every: on the mark", due("2026-11-13 10:30"), ["water"])
 check("every: off the mark", due("2026-11-13 10:15").count, 0)
 check("every: not before work", due("2026-11-13 08:30").count, 0)
 check("every: not on Saturday", due("2026-11-14 10:30").count, 0)
-check("every: quiet in a break", due("2026-11-13 12:30").count, 0)
+check("every: a period alone does not quiet it", due("2026-11-13 12:30"), ["water"])
+jobs[0].skip = ["lunch"]
+check("every: quiet in a period it skips", due("2026-11-13 12:30").count, 0)
+check("every: back after the period", due("2026-11-13 13:00"), ["water"])
+jobs.append(Job(action: "nudge", when: "every", every: 10, skip: []))
+check("every: the nudge's pauses are its own", window("2026-11-13 12:30"), true)
 jobs = [Job(action: "notify", text: "stretch", when: "every", follow: ["lunch"], every: 30)]
-check("every: inside the break it follows", due("2026-11-13 12:30"), ["stretch"])
+check("every: inside the period it follows", due("2026-11-13 12:30"), ["stretch"])
 leaves = [Leave(start: "2026-11-13", end: "2026-11-13", note: "", from: "12:00", to: "14:00")]
-check("every: part leave over the break it follows", due("2026-11-13 12:30").count, 0)
+check("every: part leave over the period it follows", due("2026-11-13 12:30").count, 0)
 leaves = []
-periods = [Period(id: "mtg", from: "10:00", to: "11:00", note: "", rule: "once:2026-11-13", work: true)]
+periods = [Period(id: "mtg", from: "10:00", to: "11:00", note: "", rule: "once:2026-11-13")]
 jobs = [Job(action: "notify", when: "start", follow: ["mtg"])]
 check("leave: one-off period still on", due("2026-11-13 10:00").count, 1)
 leaves = [Leave(start: "2026-11-13", end: "2026-11-13", note: "")]
 check("leave: one-off period off", due("2026-11-13 10:00").count, 0)
-check("leave: one-off work period no nudge", window("2026-11-13 10:30"), false)
+check("leave: no nudge on leave", window("2026-11-13 10:30"), false)
 leaves = []
 jobs = []; periods = []
 
@@ -287,22 +296,26 @@ check("event: exactly 10 minutes", upcomingEvent(after: at("2026-11-13 11:50"), 
 check("event: too far off", upcomingEvent(after: at("2026-11-13 11:49"), within: 600)?.name, nil)
 check("event: meeting", upcomingEvent(after: at("2026-11-13 13:55"), within: 600)?.name, "meeting")
 check("event: nothing on Saturday", upcomingEvent(after: at("2026-11-14 11:55"), within: 600)?.name, nil)
-periods = [Period(from: "15:00", to: "16:00", note: "review", rule: nil, work: true), Period(from: "12:00", to: "13:00", note: "", rule: nil)]
-check("event: work period with a note", upcomingEvent(after: at("2026-11-13 14:55"), within: 600)?.name, "review")
-check("event: unnamed break", upcomingEvent(after: at("2026-11-13 11:55"), within: 600)?.name, T("period.rest"))
+periods = [Period(from: "15:00", to: "16:00", note: "review", rule: nil), Period(id: "rest", from: "12:00", to: "13:00", note: "", rule: nil)]
+check("event: period with a note", upcomingEvent(after: at("2026-11-13 14:55"), within: 600)?.name, "review")
+check("event: unnamed period is not announced", upcomingEvent(after: at("2026-11-13 11:55"), within: 600)?.name, nil)
+jobs = [Job(action: "nudge", when: "every", every: 10, skip: ["rest"])]
+check("event: unnamed period the nudge skips", upcomingEvent(after: at("2026-11-13 11:55"), within: 600)?.name, T("period.unnamed"))
 jobs = []; periods = []
 reset()
 
-// Work periods count as work time, on working days only
+// A period never adds work time; overtime does that
 reset()
-periods = [Period(from: "19:00", to: "20:00", note: "", rule: nil, work: true)]
-check("work period: after hours", window("2026-11-13 19:30"), true)
-check("work period: not on Saturday", window("2026-11-14 19:30"), false)
-check("work period: next start", show(nextStart(after: at("2026-11-13 18:30"))), "2026-11-13 19:00")
-check("work period: not a break", breaksOn(at("2026-11-13 12:00")).count, 0)
-periods = [Period(from: "10:00", to: "11:00", note: "", rule: "once:2026-11-14", work: true)]
-check("work period: one-off on Saturday", window("2026-11-14 10:30"), true)
-periods = []
+periods = [Period(id: "eve", from: "19:00", to: "20:00", note: "", rule: nil)]
+check("period: after hours is not work", window("2026-11-13 19:30"), false)
+check("period: on Saturday", periodOn(periods[0], at("2026-11-14 19:30")), false)
+overtimes = [Overtime(from: "10:00", to: "21:00", note: "", rule: "once:2026-11-14")]
+check("period: on a day with overtime", periodOn(periods[0], at("2026-11-14 19:30")), true)
+check("period: next start is still work", show(nextStart(after: at("2026-11-13 18:30"))), "2026-11-14 10:00")
+periods = [Period(from: "10:00", to: "11:00", note: "", rule: "once:2026-11-15")]
+check("period: one-off on its own date", periodOn(periods[0], at("2026-11-15 10:30")), true)
+check("period: one-off adds no work", window("2026-11-15 10:30"), false)
+periods = []; overtimes = []; jobs = []
 
 // Apps follow work hours (with overtime), overtime only, or a period, widened by lead and lag
 func appJob(_ name: String, follow: [String]? = nil, lead: Int? = nil, lag: Int? = nil) -> Job {
@@ -339,7 +352,7 @@ ot.disabled = true
 check("apps: turned off", appWanted(ot, at("2026-11-14 11:00")), false)
 check("apps: only app tasks", appWanted(Job(action: "notify", when: "start"), at("2026-11-13 10:00")), false)
 overtimes = []
-periods = [Period(id: "m", from: "14:00", to: "15:00", note: "", rule: nil, work: true)]
+periods = [Period(id: "m", from: "14:00", to: "15:00", note: "", rule: nil)]
 let meet = appJob("C", follow: ["m"], lead: 5, lag: 0)
 check("apps: period lead", appWanted(meet, at("2026-11-13 13:55")), true)
 check("apps: period over", appWanted(meet, at("2026-11-13 15:00")), false)
@@ -366,10 +379,10 @@ leaves = [Leave(start: "2026-11-13", end: "2026-11-13", note: "", disabled: true
 check("off: whole-day leave ignored", leave(on: "2026-11-13") == nil, true)
 check("off: part leave ignored", partLeaves(on: "2026-11-13").count, 0)
 leaves = []
-periods = [Period(from: "15:00", to: "16:00", note: "", rule: nil, disabled: true), Period(from: "19:00", to: "20:00", note: "", rule: nil, disabled: true, work: true)]
-check("off: break ignored", breaksOn(at("2026-11-13 12:00")).count, 0)
-check("off: work period ignored", window("2026-11-13 19:30"), false)
-periods = []
+periods = [Period(id: "p", from: "15:00", to: "16:00", note: "", rule: nil, disabled: true)]
+jobs = [Job(action: "nudge", when: "every", every: 10, skip: ["p"])]
+check("off: skipped period ignored", window("2026-11-13 15:30"), true)
+periods = []; jobs = []
 overtimes = [Overtime(from: "10:00", to: "12:00", note: "", rule: "once:2026-11-14", disabled: true)]
 check("off: overtime ignored", overtime(on: at("2026-11-14 11:00")).count, 0)
 check("off: no Saturday apps", appWanted(appJob("A"), at("2026-11-14 11:00")), false)
