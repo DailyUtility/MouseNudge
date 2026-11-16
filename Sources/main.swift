@@ -1795,7 +1795,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         if menu === languageItem.submenu { buildLanguageMenu(menu); return }
     }
     // The holiday line's submenu: the saved calendars to switch between, what can be done with them,
-    // then this year's holidays, past days greyed out.
+    // then this year's holidays, past days greyed out. Once this year's are all over, next year's follow if the calendar has them.
     func buildHolidayMenu() {
         let cache = cachedCalendars()
         let rows = (holidaySources + [""]).map { source in
@@ -1803,8 +1803,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
                 : (source == holidaySource ? holidays.name : nil) ?? cache[source]?.name ?? source.replacingOccurrences(of: #"^\w+://"#, with: "", options: .regularExpression))
         }
         let k = dayKey.string(from: Date()), year = String(k.prefix(4))
-        let keys = holidays.days.keys.filter { $0.hasPrefix(year) }.sorted()
-        let shown = rows.map { $0.0 + "\t" + $0.1 } + [holidaySource, k] + keys.map { $0 + holidays.days[$0]! }
+        let keysIn = { (y: String) in holidays.days.keys.filter { $0.hasPrefix(y) }.sorted() }
+        var years = [(year, keysIn(year))]
+        if !years[0].1.contains(where: { $0 >= k }), let y = Int(year) {
+            let next = keysIn(String(y + 1))
+            if !next.isEmpty { years.append((String(y + 1), next)) }
+        }
+        let listed: [String] = years.flatMap { y, keys -> [String] in [y] + keys.map { $0 + (holidays.days[$0] ?? "") } }
+        let shown: [String] = rows.map { $0.0 + "\t" + $0.1 } + [holidaySource, k] + listed
         guard shown != holidayMenuShown, let menu = holidayLine.submenu else { return }
         holidayMenuShown = shown; menu.removeAllItems()
         for (source, name) in rows {
@@ -1815,17 +1821,19 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         }
         [.separator(), sourceItem, refetchItem, clearSourceItem].forEach(menu.addItem)
         guard !holidaySource.isEmpty else { return }
-        menu.addItem(.separator())
-        menu.addItem(NSMenuItem(title: T("holiday.yearHeader", year), action: nil, keyEquivalent: ""))
         let label = localFmt("MdEEE")
-        let nextKey = keys.first { $0 >= k }
-        for key in keys {
-            let it = NSMenuItem(title: "\(label.string(from: dayKey.date(from: key)!))  \(holidays.days[key]!)" + (key == nextKey ? "  " + T("holiday.nextMarker") : ""), action: nil, keyEquivalent: "")
-            // An action keeps upcoming days in normal text; clicking them does nothing.
-            if key >= k { it.action = #selector(noop); it.target = self }
-            menu.addItem(it)
+        let nextKey = years.flatMap { $0.1 }.first { $0 >= k }
+        for (y, keys) in years {
+            menu.addItem(.separator())
+            menu.addItem(NSMenuItem(title: T("holiday.yearHeader", y), action: nil, keyEquivalent: ""))
+            for key in keys {
+                let it = NSMenuItem(title: "\(label.string(from: dayKey.date(from: key)!))  \(holidays.days[key]!)" + (key == nextKey ? "  " + T("holiday.nextMarker") : ""), action: nil, keyEquivalent: "")
+                // An action keeps upcoming days in normal text; clicking them does nothing.
+                if key >= k { it.action = #selector(noop); it.target = self }
+                menu.addItem(it)
+            }
+            if keys.isEmpty { menu.addItem(NSMenuItem(title: T("holiday.noYearData", y), action: nil, keyEquivalent: "")) }
         }
-        if keys.isEmpty { let none = NSMenuItem(title: T("holiday.noYearData", year), action: nil, keyEquivalent: ""); menu.addItem(none) }
     }
     @objc func noop() {}
 
