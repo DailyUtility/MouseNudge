@@ -131,9 +131,23 @@ check("task: the nudge is never due", due("2026-11-13 09:30").count, 0)
 check("task: no start on Saturday", due("2026-11-14 09:00").count, 0)
 check("task: fresh install nudge off", defaultJobs(nudging: false, interval: 10).first?.disabled, true)
 overtimes = [Overtime(from: "18:00", to: "20:00", note: "", rule: "once:2026-11-13")]
-check("task: overtime joins work, no end at 18:00", due("2026-11-13 18:00").count, 0)
-check("task: end after the overtime", due("2026-11-13 20:00"), [T("reminder.workEnd")])
+let otStart = T("reminder.periodStart", T("section.overtime")), otEnd = T("reminder.periodEnd", T("section.overtime"))
+check("task: overtime starts as work ends", due("2026-11-13 18:00"), [otStart])
+check("task: end of work after the overtime", due("2026-11-13 20:00"), [T("reminder.workEnd")])
+jobs = [Job(action: "notify", when: "both", follow: ["work"])]
+check("task: work only ends at 18:00", due("2026-11-13 18:00"), [T("reminder.workEnd")])
+check("task: work only ignores overtime", due("2026-11-13 20:00").count, 0)
+jobs = [Job(action: "notify", when: "both", follow: ["work", "overtime"])]
+check("task: both, no end at the join", due("2026-11-13 18:00"), [otStart])
+overtimes = [Overtime(from: "07:00", to: "09:00", note: "", rule: "once:2026-11-13")]
+check("task: morning overtime starts", due("2026-11-13 07:00"), [otStart])
+check("task: work starts after morning overtime", due("2026-11-13 09:00"), [T("reminder.workStart")])
+check("task: no overtime end at the join", due("2026-11-13 09:00").count, 1)
+overtimes = [Overtime(from: "10:00", to: "12:00", note: "", rule: "once:2026-11-14")]
+check("task: Saturday overtime alone ends as overtime", due("2026-11-14 12:00"), [otEnd])
+check("task: work hours alone default to both", follows(Job(action: "notify", when: "start")), ["work", "overtime"])
 overtimes = []
+jobs = defaultJobs(nudging: true, interval: 15)
 reset(start: "22:00", end: "06:00")
 check("task: night shift ends next morning", due("2026-11-14 06:00").count, 1)
 check("task: no end after Saturday night", due("2026-11-15 06:00").count, 0)

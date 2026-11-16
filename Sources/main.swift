@@ -375,14 +375,14 @@ struct Job: Codable, Equatable {
     var when: String; var at: String? = nil; var rule: String? = nil
     // A repeating "at" task that also runs on days off (weekends, holidays, leave).
     var anyDay: Bool? = nil
-    // Each "work" for work hours (with overtime), "overtime", or a period's id; nil means work hours.
+    // Each "work" for work hours, "overtime", or a period's id; nil means work hours and overtime.
     var follow: [String]? = nil; var offset: Int? = nil; var every: Int? = nil; var lead: Int? = nil; var lag: Int? = nil
 }
 var jobs: [Job] = []
 // A fresh install starts with the nudge off and pop-ups at the start and end of work.
 func defaultJobs(nudging: Bool, interval: Int) -> [Job] {
     [Job(disabled: nudging ? nil : true, action: "nudge", when: "every", every: interval),
-     Job(action: "notify", when: "start", follow: ["work"]), Job(action: "notify", when: "end", follow: ["work"])]
+     Job(action: "notify", when: "start", follow: ["work", "overtime"]), Job(action: "notify", when: "end", follow: ["work", "overtime"])]
 }
 var nudgeJob: Job? { jobs.first { $0.action == "nudge" } }
 var nudging: Bool { nudgeJob.map { $0.disabled != true } ?? false }
@@ -399,10 +399,10 @@ func widened(_ s: (from: String, to: String), lead: Int, lag: Int) -> (from: Str
     let end = minutesOf(s.to) + (overnight(s.from, s.to) ? 1440 : 0) + lag
     return (hmOf(from), hmOf(min(from + 1439, end) % 1440))
 }
-func follows(_ j: Job) -> [String] { j.follow ?? ["work"] }
+func follows(_ j: Job) -> [String] { j.follow ?? ["work", "overtime"] }
 func followSpans(_ f: String, _ d: Date) -> [(from: String, to: String)] {
     switch f {
-    case "work": return workSpans(d) + overtimeSpans(d)
+    case "work": return workSpans(d)
     case "overtime": return overtimeSpans(d)
     case let id: return periods.first { $0.id == id }.map { periodSpans($0, d) } ?? []
     }
@@ -427,14 +427,14 @@ func clock(_ hm: String, on day: Date) -> Date {
     let m = minutesOf(hm)
     return c.date(bySettingHour: m / 60, minute: m % 60, second: 0, of: day)!
 }
-// What `f` names as whole stretches of time around `d` (the day before to the day after), touching or overlapping
+// What `fs` name as whole stretches of time around `d` (the day before to the day after), touching or overlapping
 // pieces joined: work hours running into overtime, or the days of overtime over several days, are one stretch.
-func stretches(_ f: String, around d: Date) -> [(start: Date, end: Date)] {
+func stretches(_ fs: [String], around d: Date) -> [(start: Date, end: Date)] {
     let c = Calendar.current, today = c.startOfDay(for: d)
     var all: [(start: Date, end: Date)] = []
     for k in -1...1 {
         let day = c.date(byAdding: .day, value: k, to: today)!
-        for s in followSpans(f, day) {
+        for s in fs.flatMap({ followSpans($0, day) }) {
             all.append((clock(s.from, on: day), clock(s.to, on: overnight(s.from, s.to) && s.to != "24:00" ? c.date(byAdding: .day, value: 1, to: day)! : day)))
         }
     }
@@ -477,10 +477,20 @@ func jobsDue(_ d: Date) -> [(job: Job, text: String)] {
             add(j.text.isEmpty ? T("reminder.untitled", hm) : j.text)
         default:
             let early = TimeInterval((j.offset ?? 0) * 60)
-            for f in follows(j) {
-                for s in stretches(f, around: m) {
-                    if j.when != "end" && s.start - early == m { add(edgeText(j, f, end: false)) }
-                    if j.when != "start" && s.end - early == m { add(edgeText(j, f, end: true)) }
+            // Work and overtime followed together: where one runs on into the other only the start of the next is
+            // told (overtime starting as work ends), and the end of the whole stretch is the end of work if it had any.
+            let fs = follows(j), both = fs.contains("work") && fs.contains("overtime")
+            for f in fs {
+                let other = both && ["work", "overtime"].contains(f) ? stretches([f == "work" ? "overtime" : "work"], around: m) : []
+                for s in stretches([f], around: m) {
+                    if j.when != "end" && s.start - early == m && !other.contains(where: { $0.start < s.start && s.start < $0.end }) {
+                        add(edgeText(j, f, end: false))
+                    }
+                    if j.when != "start" && s.end - early == m && !other.contains(where: { $0.start <= s.end && s.end < $0.end }) {
+                        let whole = stretches(["work", "overtime"], around: m).first { $0.end == s.end }
+                        let hadWork = f == "work" || whole.map { w in other.contains { w.start <= $0.start && $0.end <= w.end } } ?? false
+                        add(edgeText(j, hadWork ? "work" : f, end: true))
+                    }
                 }
             }
         }
@@ -502,9 +512,9 @@ func upcomingEvent(after d: Date, within: TimeInterval) -> (at: Date, name: Stri
     }
     return nil
 }
-// How far through the current stretch of work (with overtime) `d` is, 0 outside work.
+// How far through the current stretch of work and overtime `d` is, 0 outside work.
 func workProgress(_ d: Date) -> Double {
-    guard let s = stretches("work", around: d).first(where: { $0.start <= d && d < $0.end }) else { return 0 }
+    guard let s = stretches(["work", "overtime"], around: d).first(where: { $0.start <= d && d < $0.end }) else { return 0 }
     return d.timeIntervalSince(s.start) / s.end.timeIntervalSince(s.start)
 }
 
@@ -1340,7 +1350,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
             let lead = j.lead ?? 0, lag = j.lag ?? 0
             let timing = j.keepOpen == true ? (lead > 0 ? T("apps.earlyNoQuit", String(lead)) : T("apps.noQuit"))
                 : lead + lag > 0 ? T("apps.timing", String(lead), String(lag)) : ""
-            return (j.name ?? "") + "  " + names + (timing.isEmpty ? "" : T("common.paren", timing))
+            return T("job.during", names) + (timing.isEmpty ? "" : T("common.paren", timing)) + "  " + T("job.openLink", j.name ?? "")
         default: break
         }
         let edge = ["end": "End", "both": "Both"][j.when] ?? "Start"
@@ -1397,7 +1407,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         let rep = repeatRows(defaultIndex: 0, editing: old.map { ($0.rule, nil) }), t = timePicker(old?.at ?? "10:00")
         let anyDay = NSButton(checkboxWithTitle: T("job.anyDay"), target: nil, action: nil); anyDay.state = old?.anyDay == true ? .on : .off
         // Any number of times can be followed. A turned-off or deleted period stays on the list while the task follows it.
-        let pickedFollow = old.map(follows) ?? ["work"]
+        let pickedFollow = old.map(follows) ?? ["work", "overtime"]
         let shown = periods.filter { $0.disabled != true || pickedFollow.contains($0.id) }
         var choices: [String] = ["work", "overtime"] + shown.map(\.id), titles = [T("apps.followWork"), T("section.overtime")] + shown.map(periodLabel)
         for f in pickedFollow where !choices.contains(f) { choices.append(f); titles.append(T("apps.periodGone")) }
