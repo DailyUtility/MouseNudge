@@ -163,11 +163,12 @@ func loadHolidays() {
     if let d = try? Data(contentsOf: holidayURL), let c = try? JSONDecoder().decode(HolidayCache.self, from: d) { holidays = c }
 }
 
-// Stale when empty or fetched in an earlier (local) year: a new year gets a fresh copy of the calendar.
+// Stale when empty, fetched in an earlier (local) year, or a month old: a new year gets a fresh copy of the calendar,
+// and next year's days off, usually announced late in the year, show up within a month.
 func holidaysStale() -> Bool {
-    let c = Calendar.current
+    let c = Calendar.current, now = Date()
     guard !holidays.days.isEmpty, let f = ISO8601DateFormatter().date(from: holidays.fetched) else { return true }
-    return c.component(.year, from: f) != c.component(.year, from: Date())
+    return c.component(.year, from: f) != c.component(.year, from: now) || now.timeIntervalSince(f) > 30 * 86400
 }
 
 let ymd: DateFormatter = { let f = DateFormatter(); f.locale = Locale(identifier: "en_US_POSIX"); f.dateFormat = "yyyyMMdd"; return f }()
