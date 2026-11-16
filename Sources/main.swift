@@ -1,10 +1,24 @@
-// Menu bar mouse nudger: working days (Monday–Friday, minus public holidays from an optional calendar subscription) during work hours (set from the menu, default 09:00–18:00) plus any overtime (one day or repeating), minus breaks (daily, weekly, last weekday of the month or one-off), every N minutes (set from the menu, default 10), last nudge at the first step past the end; skips when the screen is locked (unless allowed) or the person used any input device in the last minute.
+// Shiftbell, a menu bar work-time keeper; its mouse nudge runs on working days (Monday–Friday, minus public holidays from an optional calendar subscription) during work hours (set from the menu, default 09:00–18:00) plus any overtime (one day or repeating), minus breaks (daily, weekly, last weekday of the month or one-off), every N minutes (set from the menu, default 10), last nudge at the first step past the end; skips when the screen is locked (unless allowed) or the person used any input device in the last minute.
 import Cocoa
 import IOKit
 import ApplicationServices
 import ServiceManagement
 import Network
 import UniformTypeIdentifiers
+
+// Shiftbell was called MouseNudge: its settings and data folder move over once, before anything reads them.
+// Tests run without a bundle and skip this.
+let oldBundleID = "io.github.mar-er.mousenudge"
+let movedFromMouseNudge: Void = {
+    guard Bundle.main.bundleIdentifier == "io.github.mar-er.shiftbell" else { return }
+    let d = UserDefaults.standard
+    if !d.bool(forKey: "movedFromMouseNudge") {
+        for (k, v) in d.persistentDomain(forName: oldBundleID) ?? [:] where d.object(forKey: k) == nil { d.set(v, forKey: k) }
+        d.set(true, forKey: "movedFromMouseNudge")
+    }
+    let base = NSHomeDirectory() + "/Library/Application Support/", fm = FileManager.default
+    if fm.fileExists(atPath: base + "mouse-nudge") && !fm.fileExists(atPath: base + "shiftbell") { try? fm.moveItem(atPath: base + "mouse-nudge", toPath: base + "shiftbell") }
+}()
 
 let skipIfIdleUnder: Double = 60
 // Minutes between nudges, chosen by the person from the menu.
@@ -17,7 +31,7 @@ var workEnd: String { UserDefaults.standard.string(forKey: "workEnd") ?? "18:00"
 var nudgeWhenLocked: Bool { UserDefaults.standard.bool(forKey: "nudgeWhenLocked") }
 func screenLocked() -> Bool { (CGSessionCopyCurrentDictionary() as? [String: Any])?["CGSSessionScreenIsLocked"] as? Bool ?? false }
 func onScreen(_ pt: CGPoint) -> Bool { var n: UInt32 = 0; CGGetDisplaysWithPoint(pt, 0, nil, &n); return n > 0 }
-let dir = NSHomeDirectory() + "/Library/Application Support/mouse-nudge"
+let dir = NSHomeDirectory() + "/Library/Application Support/shiftbell"
 // A fresh install on someone else's Mac has no data folder yet.
 let _ = try? FileManager.default.createDirectory(atPath: dir, withIntermediateDirectories: true)
 let logURL = URL(fileURLWithPath: dir + "/nudge.log")
@@ -847,7 +861,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
             e.rep.draw(in: r, from: .zero, operation: .sourceOver, fraction: 1, respectFlipped: true, hints: nil)
             return true
         }
-        image.accessibilityDescription = "MouseNudge"
+        image.accessibilityDescription = "Shiftbell"
         item.button?.image = image; item.button?.imagePosition = .imageLeading
     }
 
@@ -1391,7 +1405,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
 // Open at login is a user launch agent that runs this copy's executable by path, so it starts at login and again after a
 // crash, but not after Quit (a clean exit). A plain agent file keeps working when the app is rebuilt or updated in place,
 // unlike one registered through SMAppService, which is tied to the signature it was registered with.
-let loginAgentLabel = "io.github.mar-er.mousenudge.keepalive"
+let loginAgentLabel = "io.github.mar-er.shiftbell.keepalive"
 let loginAgentURL = URL(fileURLWithPath: NSHomeDirectory() + "/Library/LaunchAgents/\(loginAgentLabel).plist")
 let underLoginAgent = ProcessInfo.processInfo.environment["XPC_SERVICE_NAME"] == loginAgentLabel
 let takeoverArgument = "--takeover"
@@ -1422,6 +1436,13 @@ func claimSingleInstance() {
         .filter { $0.processIdentifier != getpid() }
     if CommandLine.arguments.contains(takeoverArgument) { return }
     if underLoginAgent { others.forEach { $0.terminate() }; return }
+    // MouseNudge, the old name: close it, and move its open-at-login agent over to this copy.
+    NSRunningApplication.runningApplications(withBundleIdentifier: oldBundleID).forEach { $0.terminate() }
+    let oldAgent = URL(fileURLWithPath: NSHomeDirectory() + "/Library/LaunchAgents/\(oldBundleID).keepalive.plist")
+    if FileManager.default.fileExists(atPath: oldAgent.path) {
+        try? FileManager.default.removeItem(at: oldAgent); launchctl("bootout", "gui/\(getuid())/\(oldBundleID).keepalive")
+        if !loginAgentOn { try? enableLoginAgent() }
+    }
     let legacy = SMAppService.agent(plistName: "io.github.mar-er.mousenudge.agent.plist")
     for old in [SMAppService.mainApp, legacy] where old.status == .enabled { try? old.unregister(); if !loginAgentOn { try? enableLoginAgent() } }
     if loginAgentOn {

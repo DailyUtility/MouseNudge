@@ -3,13 +3,13 @@
 <plist version="1.0">
 <dict>
 	<key>CFBundleExecutable</key>
-	<string>MouseNudge</string>
+	<string>Shiftbell</string>
 	<key>CFBundleIconFile</key>
-	<string>MouseNudge</string>
+	<string>Shiftbell</string>
 	<key>CFBundleIdentifier</key>
-	<string>io.github.mar-er.mousenudge</string>
+	<string>io.github.mar-er.shiftbell</string>
 	<key>CFBundleName</key>
-	<string>MouseNudge</string>
+	<string>Shiftbell</string>
 	<key>CFBundlePackageType</key>
 	<string>APPL</string>
 	<key>CFBundleShortVersionString</key>

@@ -1,4 +1,4 @@
-# Pushing a tag such as v1.0.1 runs the tests, builds MouseNudge-<version>.dmg and attaches it to a GitHub release.
+# Pushing a tag such as v1.0.1 runs the tests, builds Shiftbell-<version>.dmg and attaches it to a GitHub release.
 # The tag must match CFBundleShortVersionString in Resources/Info.plist.
 #
 # Signing: put the "MouseNudge Local Signing" certificate in the repository secrets so every release has the same
@@ -54,4 +54,4 @@ jobs:
       - name: Publish the release
         env:
           GH_TOKEN: ${{ github.token }}
-        run: gh release create "$GITHUB_REF_NAME" build/MouseNudge-*.dmg --title "MouseNudge ${GITHUB_REF_NAME#v}" --generate-notes
+        run: gh release create "$GITHUB_REF_NAME" build/Shiftbell-*.dmg --title "Shiftbell ${GITHUB_REF_NAME#v}" --generate-notes
