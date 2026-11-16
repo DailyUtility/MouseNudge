@@ -139,6 +139,10 @@ check("task: work only ends at 18:00", due("2026-11-13 18:00"), [T("reminder.wor
 check("task: work only ignores overtime", due("2026-11-13 20:00").count, 0)
 jobs = [Job(action: "notify", when: "both", follow: ["work", "overtime"])]
 check("task: both, no end at the join", due("2026-11-13 18:00"), [otStart])
+overtimes = [Overtime(from: "19:00", to: "21:00", note: "", rule: "once:2026-11-13")]
+check("task: gap, work ends as usual", due("2026-11-13 18:00"), [T("reminder.workEnd")])
+check("task: gap, overtime starts", due("2026-11-13 19:00"), [otStart])
+check("task: gap, overtime ends as overtime", due("2026-11-13 21:00"), [otEnd])
 overtimes = [Overtime(from: "07:00", to: "09:00", note: "", rule: "once:2026-11-13")]
 check("task: morning overtime starts", due("2026-11-13 07:00"), [otStart])
 check("task: work starts after morning overtime", due("2026-11-13 09:00"), [T("reminder.workStart")])
