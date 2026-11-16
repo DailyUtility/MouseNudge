@@ -1,7 +1,7 @@
 # Pushing a tag such as v1.0.1 runs the tests, builds Shiftbell-<version>.dmg and attaches it to a GitHub release.
 # The tag must match CFBundleShortVersionString in Resources/Info.plist.
 #
-# Signing: put the "MouseNudge Local Signing" certificate in the repository secrets so every release has the same
+# Signing: put the "Shiftbell Local Signing" (or older "MouseNudge Local Signing") certificate in the repository secrets so every release has the same
 # signature and people keep their Accessibility grant across updates:
 #   SIGNING_CERT_P12           the certificate and its private key exported as .p12, base64 encoded (base64 -i cert.p12)
 #   SIGNING_CERT_P12_PASSWORD  the password chosen when exporting it
@@ -46,7 +46,7 @@ jobs:
           security set-key-partition-list -S apple-tool:,apple: -s -k "$pw" "$kc" >/dev/null
           security list-keychains -d user -s "$kc" $(security list-keychains -d user | tr -d '"')
           rm "$RUNNER_TEMP/cert.p12"
-          echo "SIGN_IDENTITY=MouseNudge Local Signing" >> "$GITHUB_ENV"
+          # build.sh picks the certificate up by name, the new one or the old.
 
       - name: Build the disk image
         run: ./make-dmg.sh
