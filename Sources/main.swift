@@ -619,36 +619,43 @@ final class SectionHeaderView: NSView {
     override func accessibilityPerformPress() -> Bool { onClick(); return true }
 }
 
-// An entry row: its label, then an edit button, a pause/resume button that turns the entry off or on in place (the menu
-// stays open) and a delete button. A turned-off entry is greyed out.
+// An entry row: its label, then a test button (tasks only) that runs it once now, an edit button, a pause/resume button
+// that turns the entry off or on in place (the menu stays open) and a delete button. A turned-off entry is greyed out.
 final class EntryRowView: NSView {
-    let label = NSTextField(labelWithString: ""), edit = NSButton(), toggle = NSButton(), trash = NSButton()
-    let title: String, onToggle: () -> Bool, onEdit: () -> Void, onDelete: () -> Void
+    let label = NSTextField(labelWithString: ""), test = NSButton(), edit = NSButton(), toggle = NSButton(), trash = NSButton()
+    let title: String, onToggle: () -> Bool, onEdit: () -> Void, onDelete: () -> Void, onTest: (() -> Void)?
     var disabled: Bool { didSet { refresh() } }
+    // Room right of the label for the buttons.
+    var buttonsWidth: CGFloat { onTest == nil ? 94 : 118 }
 
-    init(title: String, disabled: Bool, onToggle: @escaping () -> Bool, onEdit: @escaping () -> Void, onDelete: @escaping () -> Void) {
-        self.title = title; self.disabled = disabled; self.onToggle = onToggle; self.onEdit = onEdit; self.onDelete = onDelete
+    init(title: String, disabled: Bool, onToggle: @escaping () -> Bool, onEdit: @escaping () -> Void, onDelete: @escaping () -> Void, onTest: (() -> Void)? = nil) {
+        self.title = title; self.disabled = disabled; self.onToggle = onToggle; self.onEdit = onEdit; self.onDelete = onDelete; self.onTest = onTest
         super.init(frame: NSRect(x: 0, y: 0, width: 240, height: 24))
         autoresizingMask = [.width]
         label.font = .menuFont(ofSize: 0); label.lineBreakMode = .byTruncatingTail
         label.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
-        for (b, sel) in [(edit, #selector(edited)), (toggle, #selector(toggled)), (trash, #selector(deleted))] {
+        for (b, sel) in [(test, #selector(tested)), (edit, #selector(edited)), (toggle, #selector(toggled)), (trash, #selector(deleted))] {
             b.isBordered = false; b.imagePosition = .imageOnly; b.target = self; b.action = sel
             b.symbolConfiguration = .init(pointSize: 13, weight: .regular)
         }
         trash.image = NSImage(systemSymbolName: "trash", accessibilityDescription: T("common.delete")); trash.toolTip = T("common.delete")
         edit.image = NSImage(systemSymbolName: "pencil.circle", accessibilityDescription: T("common.edit")); edit.toolTip = T("common.edit")
-        trash.contentTintColor = .secondaryLabelColor; edit.contentTintColor = .secondaryLabelColor
-        for v in [label, edit, toggle, trash] as [NSView] { v.translatesAutoresizingMaskIntoConstraints = false; addSubview(v) }
+        test.image = NSImage(systemSymbolName: "bolt.circle", accessibilityDescription: T("common.test")); test.toolTip = T("common.test")
+        trash.contentTintColor = .secondaryLabelColor; edit.contentTintColor = .secondaryLabelColor; test.contentTintColor = .secondaryLabelColor
+        let first: NSButton = onTest == nil ? edit : test
+        for v in [label, edit, toggle, trash] + (onTest == nil ? [] : [test]) as [NSView] { v.translatesAutoresizingMaskIntoConstraints = false; addSubview(v) }
+        if onTest != nil {
+            NSLayoutConstraint.activate([edit.leadingAnchor.constraint(equalTo: test.trailingAnchor, constant: 4), test.centerYAnchor.constraint(equalTo: centerYAnchor), test.widthAnchor.constraint(equalToConstant: 20)])
+        }
         NSLayoutConstraint.activate([
             label.leadingAnchor.constraint(equalTo: leadingAnchor, constant: 36), label.centerYAnchor.constraint(equalTo: centerYAnchor),
-            edit.leadingAnchor.constraint(greaterThanOrEqualTo: label.trailingAnchor, constant: 10),
+            first.leadingAnchor.constraint(greaterThanOrEqualTo: label.trailingAnchor, constant: 10),
             edit.centerYAnchor.constraint(equalTo: centerYAnchor), edit.widthAnchor.constraint(equalToConstant: 20),
             toggle.leadingAnchor.constraint(equalTo: edit.trailingAnchor, constant: 4), toggle.centerYAnchor.constraint(equalTo: centerYAnchor), toggle.widthAnchor.constraint(equalToConstant: 20),
             trash.leadingAnchor.constraint(equalTo: toggle.trailingAnchor, constant: 4), trash.centerYAnchor.constraint(equalTo: centerYAnchor),
             trash.widthAnchor.constraint(equalToConstant: 20), trash.trailingAnchor.constraint(equalTo: trailingAnchor, constant: -12),
         ])
-        frame.size.width = max(240, label.intrinsicContentSize.width + 36 + 94)
+        frame.size.width = max(240, label.intrinsicContentSize.width + 36 + buttonsWidth)
         refresh()
     }
     required init?(coder: NSCoder) { fatalError() }
@@ -660,9 +667,10 @@ final class EntryRowView: NSView {
         toggle.contentTintColor = disabled ? .controlAccentColor : .secondaryLabelColor
         setAccessibilityLabel(disabled ? T("item.disabledLabel", title) : title)
         label.sizeToFit()
-        frame.size.width = max(frame.size.width, label.frame.width + 36 + 94)
+        frame.size.width = max(frame.size.width, label.frame.width + 36 + buttonsWidth)
     }
     @objc func toggled() { disabled = onToggle() }
+    @objc func tested() { enclosingMenuItem?.menu?.cancelTracking(); if let onTest { DispatchQueue.main.async(execute: onTest) } }
     @objc func edited() { enclosingMenuItem?.menu?.cancelTracking(); DispatchQueue.main.async(execute: onEdit) }
     @objc func deleted() { enclosingMenuItem?.menu?.cancelTracking(); DispatchQueue.main.async(execute: onDelete) }
 }
@@ -694,7 +702,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     var sectionCount: [String: Int] = [:]
     let pauseItem = NSMenuItem(title: "", action: #selector(togglePause), keyEquivalent: "p")
     let workHoursItem = NSMenuItem(title: "", action: #selector(setWorkHours), keyEquivalent: "")
-    let nowItem = NSMenuItem(title: "", action: #selector(nudgeNow), keyEquivalent: "n")
     let refetchItem = NSMenuItem(title: "", action: #selector(refetchHolidays), keyEquivalent: "")
     let clearSourceItem = NSMenuItem(title: "", action: #selector(clearHolidaySource), keyEquivalent: "")
     let logItem = NSMenuItem(title: "", action: #selector(openLog), keyEquivalent: "")
@@ -734,8 +741,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         for i in [lastLine, nextLine, todayLine, overtimeLine, breakLine] { i.isEnabled = false }
         holidayLine.submenu = NSMenu(); holidayLine.submenu!.delegate = self
         loadCustomLanguages(); applyLanguageChoice(); reportLanguageProblems(); watchLanguagesFolder()
-        for i in [permLine, pauseItem, workHoursItem, nowItem, refetchItem, clearSourceItem, logItem, clearLogItem, autoClearItem, loginItem, sourceItem] { i.target = self }
-        let (now, more, quit) = (nowItem, moreItem, quitItem)
+        for i in [permLine, pauseItem, workHoursItem, refetchItem, clearSourceItem, logItem, clearLogItem, autoClearItem, loginItem, sourceItem] { i.target = self }
+        let (more, quit) = (moreItem, quitItem)
         more.submenu = NSMenu(); languageItem.submenu = NSMenu(); languageItem.submenu!.delegate = self
         loginItem.state = loginAgentOn ? .on : .off
         autoClearItem.state = autoClearLog ? .on : .off
@@ -745,10 +752,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
             let v = SectionHeaderView(symbol: sym); v.onClick = { [weak self, weak root] in if let root { self?.toggleSection(root) } }
             root.view = v
         }
-        for (i, sym) in [(pauseItem, "pause.circle"), (now, "cursorarrow.motionlines"), (workHoursItem, "clock"), (more, "ellipsis.circle")] {
+        for (i, sym) in [(pauseItem, "pause.circle"), (workHoursItem, "clock"), (more, "ellipsis.circle")] {
             i.image = NSImage(systemSymbolName: sym, accessibilityDescription: nil)
         }
-        [lastLine, nextLine, holidayLine, todayLine, overtimeLine, breakLine, permLine, .separator(), pauseItem, now, .separator(), leaveRoot, overtimeRoot, periodRoot, tasksRoot, workHoursItem, .separator(), more, quit].forEach(menu.addItem)
+        [lastLine, nextLine, holidayLine, todayLine, overtimeLine, breakLine, permLine, .separator(), pauseItem, .separator(), leaveRoot, overtimeRoot, periodRoot, tasksRoot, workHoursItem, .separator(), more, quit].forEach(menu.addItem)
         item.menu = menu
         loadHolidays()
         loadLeaves()
@@ -787,7 +794,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     // Every title, in the current language; the section rows are rebuilt.
     func retitle() {
         permLine.title = T("status.needAccessibility")
-        nowItem.title = T("menu.nudgeNow"); refetchItem.title = T("menu.refetchHolidays"); clearSourceItem.title = T("menu.unsubscribeHoliday"); logItem.title = T("menu.openLog")
+        refetchItem.title = T("menu.refetchHolidays"); clearSourceItem.title = T("menu.unsubscribeHoliday"); logItem.title = T("menu.openLog")
         moreItem.title = T("menu.more"); loginItem.title = T("menu.openAtLogin"); sourceItem.title = T("menu.subscribeHoliday")
         quitItem.title = T("menu.quit")
         // Always says "Language" too, so someone stuck in a language they can't read still finds it.
@@ -969,7 +976,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         if hmFmt.string(from: now) != lastPrune { pruneExpired() }
         if !paused && now.timeIntervalSince(lastAppCheck) >= 10 { checkApps() }
         // The nudge lines show only while the nudge is on; pausing holds the nudge and every task, apps included.
-        for i in [lastLine, nextLine, nowItem] { i.isHidden = !nudging }
+        for i in [lastLine, nextLine] { i.isHidden = !nudging }
         permLine.isHidden = !nudging || AXIsProcessTrusted()
         pauseItem.isHidden = !jobs.contains { $0.disabled != true }
         // With no source there is nothing to refetch or clear.
@@ -1097,12 +1104,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     // the add item and any extra items. `toggle` flips entry i and returns whether it is now off; `edit` opens its form;
     // `remove` asks, then deletes.
     func fill(_ root: NSMenuItem, _ rows: [(String, Bool)], toggle: @escaping (Int) -> Bool, edit: @escaping (Int) -> Void, remove: @escaping (Int) -> Void,
-              add: (String, Selector, String), extra: [NSMenuItem] = []) {
+              add: (String, Selector, String), extra: [NSMenuItem] = [], test: ((Int) -> Void)? = nil) {
         let name = root.representedObject as! String
         sectionRows[name]?.forEach { if $0.menu != nil { menu.removeItem($0) } }
         var items: [NSMenuItem] = rows.enumerated().map { i, r in
             let it = NSMenuItem(title: r.0, action: nil, keyEquivalent: "")
-            it.view = EntryRowView(title: r.0, disabled: r.1, onToggle: { toggle(i) }, onEdit: { edit(i) }, onDelete: { remove(i) }); return it
+            it.view = EntryRowView(title: r.0, disabled: r.1, onToggle: { toggle(i) }, onEdit: { edit(i) }, onDelete: { remove(i) }, onTest: test.map { t in { t(i) } }); return it
         }
         if rows.isEmpty { let none = NSMenuItem(title: T("menu.none"), action: nil, keyEquivalent: ""); none.isEnabled = false; items.append(none) }
         let a = NSMenuItem(title: add.0, action: add.1, keyEquivalent: add.2); a.target = self
@@ -1451,7 +1458,25 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     func rebuildTasksMenu() {
         fill(tasksRoot, jobs.map { (jobLabel($0) + (jobHeld($0) ? T("common.paren", T("job.heldTag")) : ""), $0.disabled == true) }, toggle: { [unowned self] i in
             defer { saveJSON(jobs, to: jobsURL); jobsChanged() }; return flip(&jobs[i].disabled, jobLabel(jobs[i]))
-        }, edit: { [unowned self] in editJob(jobs[$0]) }, remove: removeJob, add: (T("menu.addTask"), #selector(addJob), ""))
+        }, edit: { [unowned self] in editJob(jobs[$0]) }, remove: removeJob, add: (T("menu.addTask"), #selector(addJob), ""),
+           test: { [unowned self] in testJob(jobs[$0]) })
+    }
+    // Runs a task once now, whatever its time, turned off or paused, so its setup can be checked: the pop-up shows the text
+    // it would show (at its start, for one told at both edges), the nudge moves the cursor, an app is opened.
+    func testJob(_ j: Job) {
+        appendLog(T("log.taskTested", jobLabel(j)))
+        switch j.action {
+        case "nudge": run(manual: true); let now = Date(); next = slot(after: now, now: now); tick()
+        case "app":
+            guard let path = j.path else { return }
+            NSWorkspace.shared.openApplication(at: URL(fileURLWithPath: path), configuration: NSWorkspace.OpenConfiguration()) { _, error in
+                DispatchQueue.main.async { appendLog(error.map { T("log.appOpenFailed", j.name ?? "", $0.localizedDescription) } ?? T("log.appOpened", j.name ?? "")) }
+            }
+        case "notify":
+            let f = follows(j).first ?? "work"
+            showReminder([["at", "every"].contains(j.when) ? (j.text.isEmpty ? T("reminder.untitled", hmFmt.string(from: Date())) : j.text) : edgeText(j, f, end: j.when == "end")])
+        default: perform(j)
+        }
     }
     // After any change to the tasks: the nudge interval and its permission, the next nudge, the apps.
     func jobsChanged() {
@@ -1627,7 +1652,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         next = nextSlot(after: Date()); tick()
     }
     @objc func togglePause() { paused.toggle(); UserDefaults.standard.set(paused, forKey: "paused"); tick() }
-    @objc func nudgeNow() { run(manual: true); let now = Date(); next = slot(after: now, now: now); tick() }
     // Paste a holiday link; it is fetched right away and only kept if it yields holidays.
     // This year's holidays, filled in each time the submenu opens; past days are greyed out.
     func menuNeedsUpdate(_ menu: NSMenu) {
