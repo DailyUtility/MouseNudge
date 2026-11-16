@@ -1,22 +1,40 @@
-// Menu bar mouse nudger: working days (Monday–Friday, minus public holidays from an optional calendar subscription) during work hours (set from the menu, default 09:00–18:00) plus any overtime (one day or repeating), minus breaks (daily, weekly, last weekday of the month or one-off), every N minutes (set from the menu, default 10), last nudge at the first step past the end; skips when the screen is locked (unless allowed) or the person used any input device in the last minute.
+// Shiftbell, a menu bar work-time keeper that runs scheduled tasks (pop-ups, apps, shortcuts, links, commands) around work time; its mouse nudge, a task that can be turned off, runs on working days (Monday–Friday, minus public holidays from an optional calendar subscription) during work hours (set from the menu, default 09:00–18:00) plus any overtime (one day or repeating), minus rest periods, plus work periods (daily, weekly, monthly or one-off), every N minutes (set on the nudge task, default 10), last nudge at the first step past the end; skips when the screen is locked (unless allowed) or the person used any input device in the last minute.
 import Cocoa
 import IOKit
 import ApplicationServices
 import ServiceManagement
 import Network
+import UniformTypeIdentifiers
+
+// Shiftbell was called MouseNudge: its settings and data folder move over once, before anything reads them.
+// Tests run without a bundle and skip this.
+let oldBundleID = "io.github.mar-er.mousenudge"
+let movedFromMouseNudge: Void = {
+    guard Bundle.main.bundleIdentifier == "io.github.mar-er.shiftbell" else { return }
+    let d = UserDefaults.standard
+    if !d.bool(forKey: "movedFromMouseNudge") {
+        for (k, v) in d.persistentDomain(forName: oldBundleID) ?? [:] where d.object(forKey: k) == nil { d.set(v, forKey: k) }
+        d.set(true, forKey: "movedFromMouseNudge")
+    }
+    let base = NSHomeDirectory() + "/Library/Application Support/", fm = FileManager.default
+    if fm.fileExists(atPath: base + "mouse-nudge") && !fm.fileExists(atPath: base + "shiftbell") { try? fm.moveItem(atPath: base + "mouse-nudge", toPath: base + "shiftbell") }
+}()
 
 let skipIfIdleUnder: Double = 60
-// Minutes between nudges, chosen by the person from the menu.
-var intervalMinutes: Int = { let v = UserDefaults.standard.integer(forKey: "intervalMinutes"); return (1...240).contains(v) ? v : 10 }()
+// Minutes between nudges, from the nudge task (applyNudge).
+var intervalMinutes = 10
 var interval: TimeInterval { TimeInterval(intervalMinutes * 60) }
 // Work hours on working days, set from the menu.
 var workStart: String { UserDefaults.standard.string(forKey: "workStart") ?? "09:00" }
 var workEnd: String { UserDefaults.standard.string(forKey: "workEnd") ?? "18:00" }
+// Lunch inside work hours, 12:00–13:00 unless changed; an empty start means none.
+var lunchStart: String { UserDefaults.standard.string(forKey: "lunchStart") ?? "12:00" }
+var lunchEnd: String { UserDefaults.standard.string(forKey: "lunchEnd") ?? "13:00" }
 // Off by default: a locked Mac means the person is away, and a nudge could keep waking the screen.
 var nudgeWhenLocked: Bool { UserDefaults.standard.bool(forKey: "nudgeWhenLocked") }
 func screenLocked() -> Bool { (CGSessionCopyCurrentDictionary() as? [String: Any])?["CGSSessionScreenIsLocked"] as? Bool ?? false }
 func onScreen(_ pt: CGPoint) -> Bool { var n: UInt32 = 0; CGGetDisplaysWithPoint(pt, 0, nil, &n); return n > 0 }
-let dir = NSHomeDirectory() + "/Library/Application Support/mouse-nudge"
+let dir = NSHomeDirectory() + "/Library/Application Support/shiftbell"
 // A fresh install on someone else's Mac has no data folder yet.
 let _ = try? FileManager.default.createDirectory(atPath: dir, withIntermediateDirectories: true)
 let logURL = URL(fileURLWithPath: dir + "/nudge.log")
@@ -34,30 +52,38 @@ var holidays = HolidayCache(fetched: "", years: [], days: [:])
 let leaveURL = URL(fileURLWithPath: dir + "/leave.json")
 // Without from/to the leave covers whole days; with them, only that stretch of each day (a few hours or half a day),
 // which pauses nudging like a break and leaves the rest of the working day as usual.
-struct Leave: Codable { var start: String; var end: String; var note: String; var from: String? = nil; var to: String? = nil }
+// `disabled` (on leave, overtime, periods and watched apps) keeps an entry in its list but leaves it out of the schedule.
+struct Leave: Codable, Equatable { var start: String; var end: String; var note: String; var from: String? = nil; var to: String? = nil; var disabled: Bool? = nil }
 var leaves: [Leave] = []
 func loadLeaves() { if let d = try? Data(contentsOf: leaveURL), let l = try? JSONDecoder().decode([Leave].self, from: d) { leaves = l } }
 func saveLeaves() { let e = JSONEncoder(); e.outputFormatting = [.prettyPrinted, .sortedKeys]; try? e.encode(leaves).write(to: leaveURL) }
-func leave(on key: String) -> Leave? { leaves.first { $0.start <= key && key <= $0.end && $0.from == nil } }
-func partLeaves(on key: String) -> [Leave] { leaves.filter { $0.start <= key && key <= $0.end && $0.from != nil } }
+func leave(on key: String) -> Leave? { leaves.first { $0.disabled != true && $0.start <= key && key <= $0.end && $0.from == nil } }
+func partLeaves(on key: String) -> [Leave] { leaves.filter { $0.disabled != true && $0.start <= key && key <= $0.end && $0.from != nil } }
 
-// Overtime: on the days its `rule` picks (same rules as breaks), between these times, nudge even on weekends, holidays
-// and leave. Times are HH:mm, end exclusive. Older entries carry a start…end date range instead of a rule.
+// Overtime: on the days its `rule` picks (same rules as periods), between these times, nudge even on weekends. A repeating
+// one skips holidays; leave (whole-day or part-day) wins over any overtime. Times are HH:mm, end exclusive. Older
+// entries carry a start…end date range instead of a rule.
 let overtimeURL = URL(fileURLWithPath: dir + "/overtime.json")
-struct Overtime: Codable { var start: String? = nil; var end: String? = nil; var from: String; var to: String; var note: String; var rule: String?
+struct Overtime: Codable, Equatable { var start: String? = nil; var end: String? = nil; var from: String; var to: String; var note: String; var rule: String?
     // A one-off ("once:") overtime may run on to `to` on this later day, all day in between.
-    var until: String? = nil }
+    var until: String? = nil; var disabled: Bool? = nil }
 var overtimes: [Overtime] = []
-// Breaks: no nudges between from and to, on working days and overtime alike. `rule` says which days:
-// nil = every day, "once:yyyy-MM-dd", "weekly:W", or "monthly:N:W" (the Nth W of the month, N = 1–4 or -1 for the last),
+// Periods: named stretches of the day (lunch, a meeting, focus time), on the days `rule` picks, on working days and days
+// with overtime. Tasks can follow them, and a task every few minutes (the nudge too) can be quiet in them. `rule` says which days: nil = every day, "once:yyyy-MM-dd", "weekly:W", "monthly:N:W" (the Nth W of the month, N = 1–5 or -1 for the last),
+// or "monthday:D" (day D of the month, or with D < 0 counted from the end: -1 is the last day; a missing day is skipped),
 // W = Calendar weekday (1 = Sunday). The older "lastweekday:W" means "monthly:-1:W".
-let breaksURL = URL(fileURLWithPath: dir + "/breaks.json")
-struct Break: Codable { var from: String; var to: String; var note: String; var rule: String? }
-var breaks: [Break] = []
+let periodsURL = URL(fileURLWithPath: dir + "/periods.json")
+// `id` is what a task following the period, or quiet in it, refers to.
+struct Period: Codable, Equatable { var id = UUID().uuidString; var from: String; var to: String; var note: String; var rule: String?; var disabled: Bool? = nil }
+var periods: [Period] = []
 // Translation keys; weekday names come from the interface language (Language.swift).
-let weekOrdinals = ["week.first", "week.second", "week.third", "week.fourth"]
-func ordinalName(_ n: Int) -> String { T(n == -1 ? "week.last" : weekOrdinals[max(0, min(3, n - 1))]) }
-func breakApplies(_ b: Break, on d: Date) -> Bool { ruleApplies(b.rule, on: d) }
+let weekOrdinals = ["week.first", "week.second", "week.third", "week.fourth", "week.fifth"]
+func ordinalName(_ n: Int) -> String { T(n == -1 ? "week.last" : weekOrdinals[max(0, min(4, n - 1))]) }
+func monthDayName(_ n: Int) -> String { n > 0 ? T("monthday.nth", String(n)) : n == -1 ? T("monthday.last") : T("monthday.fromEnd", String(-n)) }
+// Joins sentences: a space after Latin text, none after a full-width stop as in Chinese and Japanese.
+func sentences(_ parts: String...) -> String {
+    parts.reduce("") { a, b in a.isEmpty ? b : a + ("。！？".contains(a.last!) ? "" : " ") + b }
+}
 func ruleApplies(_ rule: String?, on d: Date) -> Bool {
     guard let rule = rule, let colon = rule.firstIndex(of: ":") else { return true }
     let kind = rule[..<colon], arg = String(rule[rule.index(after: colon)...]), c = Calendar.current
@@ -70,19 +96,32 @@ func ruleApplies(_ rule: String?, on d: Date) -> Bool {
         guard p.count == 2, c.component(.weekday, from: d) == p[1] else { return false }
         if p[0] == -1 { return c.component(.month, from: d + 7 * 86400) != c.component(.month, from: d) }
         return (c.component(.day, from: d) - 1) / 7 + 1 == p[0]
+    case "monthday":
+        guard let n = Int(arg) else { return false }
+        return c.component(.day, from: d) == (n > 0 ? n : c.range(of: .day, in: .month, for: d)!.count + n + 1)
     default: return true
     }
 }
-func breaksOn(_ d: Date) -> [Break] { breaks.filter { breakApplies($0, on: d) } }
+// Whether a period counts on `d`: a one-off on its own day, a repeating one on working days and days with overtime;
+// never on a day of leave. Tasks follow it, and are quiet in it, on exactly these days.
+func periodOn(_ p: Period, _ d: Date) -> Bool {
+    p.disabled != true && ruleApplies(p.rule, on: d) && leave(on: dayKey.string(from: d)) == nil
+        && (onceDay(p.rule) != nil || isWorkday(d) || !overtime(on: d).isEmpty)
+}
+func periodSpans(_ p: Period, _ d: Date) -> [(from: String, to: String)] { periodOn(p, d) ? [(p.from, p.to)] : [] }
+// The periods on `d` that task `j` (every few minutes) is quiet in.
+func skipsOn(_ j: Job?, _ d: Date) -> [Period] { periods.filter { j?.skip?.contains($0.id) == true && periodOn($0, d) } }
 func loadJSON<T: Decodable>(_ url: URL, into v: inout T) { if let d = try? Data(contentsOf: url), let x = try? JSONDecoder().decode(T.self, from: d) { v = x } }
 func saveJSON<T: Encodable>(_ v: T, to url: URL) { let e = JSONEncoder(); e.outputFormatting = [.prettyPrinted, .sortedKeys]; try? e.encode(v).write(to: url) }
 func onceDay(_ rule: String?) -> String? { rule?.hasPrefix("once:") == true ? String(rule!.dropFirst(5)) : nil }
 func overtime(on d: Date) -> [Overtime] {
     let k = dayKey.string(from: d)
+    if leave(on: k) != nil { return [] }
     return overtimes.filter { o in
+        if o.disabled == true { return false }
         if let u = o.until, let s = onceDay(o.rule) { return s <= k && k <= u }
         if let s = o.start, let e = o.end { return s <= k && k <= e }
-        return ruleApplies(o.rule, on: d)
+        return ruleApplies(o.rule, on: d) && (onceDay(o.rule) != nil || holidays.days[k] == nil)
     }
 }
 
@@ -191,7 +230,7 @@ enum HolidayFetchError: Error {
         case .badAddress: return T("holiday.formatHint")
         case .offline: return T("holiday.offlineText")
         case .unreachable(let detail): return T("holiday.unreachableText", detail)
-        case .notCalendar: return T("holiday.notCalendarText") + " " + T("holiday.formatHint")
+        case .notCalendar: return sentences(T("holiday.notCalendarText"), T("holiday.formatHint"))
         case .noHolidays: return T("holiday.noHolidaysText")
         }
     }
@@ -253,9 +292,9 @@ func isWorkday(_ d: Date) -> Bool {
 
 let hmFmt: DateFormatter = { let f = DateFormatter(); f.locale = Locale(identifier: "en_US_POSIX"); f.dateFormat = "HH:mm"; return f }()
 
-// Breaks plus part-day leave: no nudges in these stretches.
+// The periods the nudge is quiet in, plus part-day leave: no nudges in these stretches.
 func pausesOn(_ d: Date) -> [(from: String, to: String)] {
-    breaksOn(d).map { ($0.from, $0.to) } + partLeaves(on: dayKey.string(from: d)).map { ($0.from!, $0.to!) }
+    skipsOn(nudgeJob, d).map { ($0.from, $0.to) } + partLeaves(on: dayKey.string(from: d)).map { ($0.from!, $0.to!) }
 }
 // A from–to stretch belongs to the day it starts on; when `to` is not after `from` it runs on to `to` the next morning
 // (a night shift). Whether that day is a workday, holiday or leave decides the whole stretch.
@@ -275,6 +314,10 @@ func endText(_ from: String, _ to: String) -> String { overnight(from, to) ? T("
 func spanText(_ from: String, _ to: String) -> String { from + "–" + endText(from, to) }
 
 func inBreak(_ d: Date) -> Bool { covered(d, pausesOn) }
+// Inside part-day leave; `orEnd` also counts the minute it ends, so the end of work as leave ends is not told either.
+func onPartLeave(_ d: Date, orEnd: Bool = false) -> Bool {
+    covered(d) { partLeaves(on: dayKey.string(from: $0)).map { ($0.from!, $0.to!) } } || orEnd && onPartLeave(d - 60)
+}
 func overtimeSpans(_ d: Date) -> [(from: String, to: String)] {
     let k = dayKey.string(from: d)
     return overtime(on: d).map { o in o.until == nil ? (o.from, o.to) : (k == onceDay(o.rule) ? o.from : "00:00", k == o.until ? o.to : "24:00") }
@@ -282,19 +325,37 @@ func overtimeSpans(_ d: Date) -> [(from: String, to: String)] {
 // "22:00–次日06:00", or for overtime over several days "11/14 09:00–11/16 15:00".
 func otSpanText(_ o: Overtime) -> String { o.until.map { "\(md(onceDay(o.rule) ?? "")) \(o.from)–\(md($0)) \(o.to)" } ?? spanText(o.from, o.to) }
 func workSpans(_ d: Date) -> [(from: String, to: String)] { isWorkday(d) ? [(workStart, workEnd)] : [] }
+// Lunch from `s` to `e` minutes after the start of work, or nil when there is none or it does not fit inside work hours.
+func lunchInWork(_ ls: String = lunchStart, _ le: String = lunchEnd, start ws: String = workStart, end we: String = workEnd) -> (s: Int, e: Int)? {
+    guard !ls.isEmpty, ls != le else { return nil }
+    let w0 = minutesOf(ws), len = minutesOf(we) - w0 + (overnight(ws, we) ? 1440 : 0)
+    let s = (minutesOf(ls) - w0 + 1440) % 1440, e = s + (minutesOf(le) - minutesOf(ls) + 1440) % 1440
+    return e <= len ? (s, e) : nil
+}
+// Lunch on the day its work stretch starts; after midnight on a night shift it belongs to the morning it falls on.
+func lunchSpans(_ d: Date) -> [(from: String, to: String)] {
+    guard let l = lunchInWork() else { return [] }
+    let nextMorning = minutesOf(workStart) + l.s >= 1440
+    return isWorkday(nextMorning ? dayBefore(d) : d) ? [(lunchStart, lunchEnd)] : []
+}
+// Work hours as times of day with lunch taken out.
+func workClock() -> [(String, String)] {
+    guard lunchInWork() != nil else { return [(workStart, workEnd)] }
+    return [(workStart, lunchStart), (lunchEnd, workEnd)].filter { $0.0 != $0.1 }
+}
 
 func inWindow(_ d: Date) -> Bool {
     if inBreak(d) { return false }
-    return covered(d, overtimeSpans) || covered(d, workSpans)
+    return covered(d, overtimeSpans) || covered(d, workSpans) && !covered(d, lunchSpans)
 }
 
-// The first moment after `d` when nudging may start again: the start of work hours on a working day, an overtime start, or a break end.
+// The first moment after `d` when nudging may start again: the start of work hours on a working day, an overtime start, or a pause end.
 func nextStart(after d: Date) -> Date {
     let c = Calendar.current
     for offset in 0..<400 {
         let day = c.date(byAdding: .day, value: offset, to: c.startOfDay(for: d))!
         // Break ends today include those of last night's breaks that run past midnight.
-        var marks = overtimeSpans(day).map(\.from) + (pausesOn(day) + pausesOn(dayBefore(day))).map(\.to)
+        var marks = overtimeSpans(day).map(\.from) + (pausesOn(day) + pausesOn(dayBefore(day)) + lunchSpans(day)).map(\.to)
         if isWorkday(day) { marks.append(workStart) }
         for m in Set(marks).sorted() {
             let p = m.split(separator: ":").compactMap { Int($0) }
@@ -324,6 +385,222 @@ func slot(after d: Date, now: Date) -> Date {
     var t = step(after: d)
     for _ in 0..<60000 where t <= now { t = step(after: t) }
     return t
+}
+
+// Scheduled tasks: each is an action and when it runs. Actions: "notify" (a pop-up), "nudge" (the mouse nudge above,
+// at most one, every `every` minutes during work time), "app" (opened and quit), "shortcut", "url" or "script".
+// When: "at" a time on the days `rule` picks (same rules as periods; repeating ones on working days only and not in part-day leave, a one-off
+// on its date), at the "start", "end" or "both" edges of what it follows (`offset` minutes early), "every" `every` minutes
+// while inside it (not in a break unless it follows that break), or "during" it (apps: opened `lead` minutes before it
+// starts and quit `lag` minutes after it ends, each 0–240, or with `keepOpen` never quit). Part-day leave holds them all.
+let jobsURL = URL(fileURLWithPath: dir + "/tasks.json")
+struct Job: Codable, Equatable {
+    var id = UUID().uuidString; var disabled: Bool? = nil
+    var action: String
+    // The pop-up text (empty: a default one), shortcut name, link or shell command.
+    var text: String = ""
+    var name: String? = nil; var path: String? = nil; var bundleID: String? = nil; var keepOpen: Bool? = nil
+    var when: String; var at: String? = nil; var rule: String? = nil
+    // A repeating "at" task that also runs on days off (weekends, holidays, leave).
+    var anyDay: Bool? = nil
+    // Each "work" for work hours, "lunch", "overtime", or a period's id; nil means work hours and overtime.
+    var follow: [String]? = nil; var offset: Int? = nil; var every: Int? = nil; var lead: Int? = nil; var lag: Int? = nil
+    // The ids of the periods a task every few minutes (the nudge too) is quiet in.
+    var skip: [String]? = nil
+}
+var jobs: [Job] = []
+// A fresh install starts with one pop-up task at the start and end of work and no nudge; it is added as a task when wanted.
+func defaultJobs(nudging: Bool, interval: Int) -> [Job] {
+    (nudging ? [Job(action: "nudge", when: "every", every: interval)] : []) +
+    [Job(action: "notify", when: "both", follow: ["work", "overtime"])]
+}
+var nudgeJob: Job? { jobs.first { $0.action == "nudge" } }
+var nudging: Bool { nudgeJob.map { $0.disabled != true } ?? false }
+// The nudge engine reads the interval from the nudge task.
+func applyNudge() { intervalMinutes = nudgeJob?.every ?? 10 }
+
+func minutesOf(_ hm: String) -> Int { let p = hm.split(separator: ":").compactMap { Int($0) }; return p.count == 2 ? p[0] * 60 + p[1] : 0 }
+// Whether two daily stretches share any time of day; an end at or before its start runs past midnight.
+func clockOverlap(_ a: (String, String), _ b: (String, String)) -> Bool {
+    func parts(_ f: String, _ t: String) -> [Range<Int>] {
+        let x = minutesOf(f), y = minutesOf(t)
+        return x < y ? [x..<y] : [x..<1440, 0..<y].filter { !$0.isEmpty }
+    }
+    return parts(a.0, a.1).contains { r in parts(b.0, b.1).contains { r.overlaps($0) } }
+}
+// Whether the nudge can run in a period at all: it has to touch work hours or some overtime (one over several days covers whole days).
+func periodMeetsWork(_ p: Period) -> Bool {
+    workClock().contains { clockOverlap((p.from, p.to), $0) }
+        || overtimes.contains { $0.disabled != true && ($0.until != nil || clockOverlap((p.from, p.to), ($0.from, $0.to))) }
+}
+func hmOf(_ m: Int) -> String { String(format: "%02d:%02d", m / 60 % 24, m % 60) }
+// Opening early stops at midnight, so the stretch still belongs to its own day; it never grows to a whole day.
+// A stretch that runs to midnight (a day inside overtime over several days) is not stretched past it.
+func widened(_ s: (from: String, to: String), lead: Int, lag: Int) -> (from: String, to: String) {
+    let from = max(0, minutesOf(s.from) - lead)
+    if s.to == "24:00" { return (hmOf(from), s.to) }
+    let end = minutesOf(s.to) + (overnight(s.from, s.to) ? 1440 : 0) + lag
+    return (hmOf(from), hmOf(min(from + 1439, end) % 1440))
+}
+func follows(_ j: Job) -> [String] { j.follow ?? ["work", "overtime"] }
+func followSpans(_ f: String, _ d: Date) -> [(from: String, to: String)] {
+    switch f {
+    case "work": return workSpans(d)
+    case "lunch": return lunchSpans(d)
+    case "overtime": return overtimeSpans(d)
+    case let id: return periods.first { $0.id == id }.map { periodSpans($0, d) } ?? []
+    }
+}
+func jobSpans(_ j: Job, _ d: Date) -> [(from: String, to: String)] { follows(j).flatMap { followSpans($0, d) } }
+func appSpans(_ j: Job, _ d: Date) -> [(from: String, to: String)] { jobSpans(j, d).map { widened($0, lead: j.lead ?? 0, lag: j.lag ?? 0) } }
+// A task that follows only paused entries (overtime with every entry paused, or paused periods) is held with them.
+func followPaused(_ f: String) -> Bool {
+    switch f {
+    case "work": return false
+    case "lunch": return lunchInWork() == nil
+    case "overtime": return !overtimes.isEmpty && overtimes.allSatisfy { $0.disabled == true }
+    case let id: return periods.first { $0.id == id }?.disabled == true
+    }
+}
+func jobHeld(_ j: Job) -> Bool { j.when != "at" && j.action != "nudge" && !follows(j).isEmpty && follows(j).allSatisfy(followPaused) }
+// A task kept when the only period it followed was deleted: it follows nothing and does not run until given a time again.
+func jobUnbound(_ j: Job) -> Bool { j.when != "at" && j.action != "nudge" && follows(j).isEmpty }
+func appWanted(_ j: Job, _ d: Date) -> Bool { j.action == "app" && j.disabled != true && !onPartLeave(d) && covered(d) { appSpans(j, $0) } }
+
+// HH:mm on a day as a moment; "24:00" is the next midnight.
+func clock(_ hm: String, on day: Date) -> Date {
+    let c = Calendar.current
+    if hm == "24:00" { return c.date(byAdding: .day, value: 1, to: day)! }
+    let m = minutesOf(hm)
+    return c.date(bySettingHour: m / 60, minute: m % 60, second: 0, of: day)!
+}
+// What `fs` name as whole stretches of time around `d` (the day before to the day after), touching or overlapping
+// pieces joined: work hours running into overtime, or the days of overtime over several days, are one stretch.
+func stretches(_ fs: [String], around d: Date) -> [(start: Date, end: Date)] {
+    let c = Calendar.current, today = c.startOfDay(for: d)
+    var all: [(start: Date, end: Date)] = []
+    for k in -1...1 {
+        let day = c.date(byAdding: .day, value: k, to: today)!
+        for s in fs.flatMap({ followSpans($0, day) }) {
+            all.append((clock(s.from, on: day), clock(s.to, on: overnight(s.from, s.to) && s.to != "24:00" ? c.date(byAdding: .day, value: 1, to: day)! : day)))
+        }
+    }
+    var merged: [(start: Date, end: Date)] = []
+    for s in all.sorted(by: { $0.start < $1.start }) {
+        if let last = merged.last, s.start <= last.end { merged[merged.count - 1].end = max(last.end, s.end) } else { merged.append(s) }
+    }
+    return merged
+}
+func periodName(_ p: Period) -> String { p.note.isEmpty ? T("period.unnamed") : p.note }
+func followTitle(_ f: String) -> String {
+    switch f {
+    case "work": return T("apps.followWork")
+    case "lunch": return T("form.lunch")
+    case "overtime": return T("section.overtime")
+    case let id: return periods.first { $0.id == id }.map(periodName) ?? T("apps.periodGone")
+    }
+}
+// The pop-up text at an edge of `f`, unless the task has its own.
+func edgeText(_ j: Job, _ f: String, end: Bool) -> String {
+    if !j.text.isEmpty { return j.text }
+    if let o = j.offset, o > 0 { return T(end ? "job.endsIn" : "job.startsIn", followTitle(f), String(o)) }
+    if f == "work" { return T(end ? "reminder.workEnd" : "reminder.workStart") }
+    return T(end ? "reminder.periodEnd" : "reminder.periodStart", followTitle(f))
+}
+// The tasks due in the minute `d` falls in, each with its pop-up text (or its own text for other actions). The nudge
+// keeps its own timing, and apps are checked on their own.
+func jobsDue(_ d: Date) -> [(job: Job, text: String)] {
+    let m = Calendar.current.dateInterval(of: .minute, for: d)!.start, hm = hmFmt.string(from: m)
+    var due: [(job: Job, text: String)] = []
+    for j in jobs where j.disabled != true && !["nudge", "app"].contains(j.action) {
+        func add(_ s: String) { if !due.contains(where: { $0.job.id == j.id && $0.text == s }) { due.append((j, j.action == "notify" ? s : j.text)) } }
+        switch j.when {
+        case "at":
+            if j.at == hm && ruleApplies(j.rule, on: m) && (onceDay(j.rule) != nil || j.anyDay == true || isWorkday(m) && !onPartLeave(m)) { add(j.text.isEmpty ? T("reminder.untitled", hm) : j.text) }
+        case "every":
+            let n = j.every ?? 0
+            guard n > 0, minutesOf(hm) % n == 0, !onPartLeave(m), covered(m, { jobSpans(j, $0) }) else { continue }
+            if covered(m, { d in skipsOn(j, d).map { ($0.from, $0.to) } }) { continue }
+            // Lunch is not work: a task running in work hours stops for it, unless something else it follows goes on.
+            if covered(m, lunchSpans) && !covered(m, { d in follows(j).filter { $0 != "work" }.flatMap { followSpans($0, d) } }) { continue }
+            add(j.text.isEmpty ? T("reminder.untitled", hm) : j.text)
+        default:
+            let early = TimeInterval((j.offset ?? 0) * 60)
+            // Work and overtime followed together: where one runs on into the other only the start of the next is
+            // told, and the end of the whole stretch is the end of work if it had any. Work comes first: its start is told
+            // even inside overtime, and overtime that began during work is told to start as work ends.
+            let fs = follows(j), both = fs.contains("work") && fs.contains("overtime")
+            for f in fs {
+                let other = both && ["work", "overtime"].contains(f) ? stretches([f == "work" ? "overtime" : "work"], around: m) : []
+                for s in stretches([f], around: m) {
+                    if j.when != "end" && s.start - early == m && !onPartLeave(s.start, orEnd: true) && !cutByLeave(s.start, end: false)
+                        && (f == "work" || !other.contains(where: { $0.start < s.start && s.start < $0.end })) {
+                        add(edgeText(j, f, end: false))
+                    }
+                    guard s.end - early == m && !onPartLeave(s.end, orEnd: true) && !cutByLeave(s.end, end: true) else { continue }
+                    if !other.contains(where: { $0.start <= s.end && s.end < $0.end }) {
+                        guard j.when != "start" else { continue }
+                        let whole = stretches(["work", "overtime"], around: m).first { $0.end == s.end }
+                        let hadWork = f == "work" || whole.map { w in other.contains { w.start <= $0.start && $0.end <= w.end } } ?? false
+                        add(edgeText(j, hadWork ? "work" : f, end: true))
+                    } else if f == "work" && j.when != "end" && other.contains(where: { $0.start < s.end && s.end < $0.end }) {
+                        add(edgeText(j, "overtime", end: false))
+                    }
+                }
+            }
+        }
+    }
+    return due
+}
+
+// A midnight edge that is only there because the next day (for an end) or the day before (for a start) is whole-day
+// leave, as when overtime over several days has a day of leave in the middle: no pop-up in the night for it.
+func cutByLeave(_ t: Date, end: Bool) -> Bool {
+    let c = Calendar.current
+    guard c.startOfDay(for: t) == t else { return false }
+    return leave(on: dayKey.string(from: end ? t : dayBefore(t))) != nil
+}
+// Every task due after `from` up to `to` (whole minutes, from the start of that day at the earliest), with the minute it
+// was due: what a pause, sleep or a quit Mac missed.
+func dueBetween(after from: Date, upTo to: Date) -> [(at: Date, job: Job, text: String)] {
+    let c = Calendar.current, first = max(c.dateInterval(of: .minute, for: from)!.start + 60, c.startOfDay(for: to))
+    // Only the minutes when a task can be due are checked: its time, its marks, or an edge of what it follows.
+    var minutes = Set<Date>(), day = c.startOfDay(for: first)
+    while day <= to {
+        for j in jobs where j.disabled != true && !["nudge", "app"].contains(j.action) {
+            switch j.when {
+            case "at": if let a = j.at { minutes.insert(clock(a, on: day)) }
+            case "every": if let n = j.every, n > 0 { for k in stride(from: 0, to: 1440, by: n) { minutes.insert(clock(hmOf(k), on: day)) } }
+            default:
+                let early = TimeInterval((j.offset ?? 0) * 60)
+                for f in follows(j) { for s in stretches([f], around: day) { minutes.formUnion([s.start - early, s.end - early]) } }
+            }
+        }
+        day = c.date(byAdding: .day, value: 1, to: day)!
+    }
+    return minutes.filter { first <= $0 && $0 <= to }.sorted().flatMap { m in jobsDue(m).map { (m, $0.job, $0.text) } }
+}
+
+// The nearest period start or timed pop-up in the minutes after `d` (up to `within` seconds away), for the menu bar
+// countdown. Lunch counts, and a period when it starts in work or overtime and is named or pauses the nudge; pop-ups every few
+// minutes don't count.
+func upcomingEvent(after d: Date, within: TimeInterval) -> (at: Date, name: String)? {
+    var m = Calendar.current.dateInterval(of: .minute, for: d)!.end
+    while m.timeIntervalSince(d) <= within {
+        let hm = hmFmt.string(from: m)
+        let working = covered(m, workSpans) || covered(m, overtimeSpans)
+        let lunch = covered(m, lunchSpans) && lunchStart == hm ? [T("form.lunch")] : []
+        let starting = !working ? lunch : lunch + periods.filter { $0.from == hm && periodOn($0, m) && (!$0.note.isEmpty || nudgeJob?.skip?.contains($0.id) == true) }.map(periodName)
+        let names = starting + jobsDue(m).filter { $0.job.action == "notify" && $0.job.when != "every" }.map(\.text)
+        if !names.isEmpty { return (m, names.joined(separator: T("common.listSeparator"))) }
+        m += 60
+    }
+    return nil
+}
+// How far through the current stretch of work and overtime `d` is, 0 outside work.
+func workProgress(_ d: Date) -> Double {
+    guard let s = stretches(["work", "overtime"], around: d).first(where: { $0.start <= d && d < $0.end }) else { return 0 }
+    return d.timeIntervalSince(s.start) / s.end.timeIntervalSince(s.start)
 }
 
 final class ClosureTarget: NSObject {
@@ -380,6 +657,66 @@ final class SectionHeaderView: NSView {
     override func mouseEntered(with e: NSEvent) { hovered = true }
     override func mouseExited(with e: NSEvent) { hovered = false }
     override func mouseUp(with e: NSEvent) { onClick() }
+    // A button to VoiceOver and other assistive tools, which can open and close the section too.
+    override func isAccessibilityElement() -> Bool { true }
+    override func accessibilityRole() -> NSAccessibility.Role? { .button }
+    override func accessibilityPerformPress() -> Bool { onClick(); return true }
+}
+
+// An entry row: its label, then a test button (tasks only) that runs it once now, an edit button, a pause/resume button
+// that turns the entry off or on in place (the menu stays open) and a delete button. A turned-off entry is greyed out.
+final class EntryRowView: NSView {
+    let label = NSTextField(labelWithString: ""), test = NSButton(), edit = NSButton(), toggle = NSButton(), trash = NSButton()
+    let title: String, onToggle: () -> Bool, onEdit: () -> Void, onDelete: () -> Void, onTest: (() -> Void)?
+    var disabled: Bool { didSet { refresh() } }
+    // Room right of the label for the buttons.
+    var buttonsWidth: CGFloat { onTest == nil ? 94 : 118 }
+
+    init(title: String, disabled: Bool, onToggle: @escaping () -> Bool, onEdit: @escaping () -> Void, onDelete: @escaping () -> Void, onTest: (() -> Void)? = nil) {
+        self.title = title; self.disabled = disabled; self.onToggle = onToggle; self.onEdit = onEdit; self.onDelete = onDelete; self.onTest = onTest
+        super.init(frame: NSRect(x: 0, y: 0, width: 240, height: 24))
+        autoresizingMask = [.width]
+        label.font = .menuFont(ofSize: 0); label.lineBreakMode = .byTruncatingTail
+        label.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
+        for (b, sel) in [(test, #selector(tested)), (edit, #selector(edited)), (toggle, #selector(toggled)), (trash, #selector(deleted))] {
+            b.isBordered = false; b.imagePosition = .imageOnly; b.target = self; b.action = sel
+            b.symbolConfiguration = .init(pointSize: 13, weight: .regular)
+        }
+        trash.image = NSImage(systemSymbolName: "trash", accessibilityDescription: T("common.delete")); trash.toolTip = T("common.delete")
+        edit.image = NSImage(systemSymbolName: "pencil.circle", accessibilityDescription: T("common.edit")); edit.toolTip = T("common.edit")
+        test.image = NSImage(systemSymbolName: "bolt.circle", accessibilityDescription: T("common.test")); test.toolTip = T("common.test")
+        trash.contentTintColor = .secondaryLabelColor; edit.contentTintColor = .secondaryLabelColor; test.contentTintColor = .secondaryLabelColor
+        let first: NSButton = onTest == nil ? edit : test
+        for v in [label, edit, toggle, trash] + (onTest == nil ? [] : [test]) as [NSView] { v.translatesAutoresizingMaskIntoConstraints = false; addSubview(v) }
+        if onTest != nil {
+            NSLayoutConstraint.activate([edit.leadingAnchor.constraint(equalTo: test.trailingAnchor, constant: 4), test.centerYAnchor.constraint(equalTo: centerYAnchor), test.widthAnchor.constraint(equalToConstant: 20)])
+        }
+        NSLayoutConstraint.activate([
+            label.leadingAnchor.constraint(equalTo: leadingAnchor, constant: 36), label.centerYAnchor.constraint(equalTo: centerYAnchor),
+            first.leadingAnchor.constraint(greaterThanOrEqualTo: label.trailingAnchor, constant: 10),
+            edit.centerYAnchor.constraint(equalTo: centerYAnchor), edit.widthAnchor.constraint(equalToConstant: 20),
+            toggle.leadingAnchor.constraint(equalTo: edit.trailingAnchor, constant: 4), toggle.centerYAnchor.constraint(equalTo: centerYAnchor), toggle.widthAnchor.constraint(equalToConstant: 20),
+            trash.leadingAnchor.constraint(equalTo: toggle.trailingAnchor, constant: 4), trash.centerYAnchor.constraint(equalTo: centerYAnchor),
+            trash.widthAnchor.constraint(equalToConstant: 20), trash.trailingAnchor.constraint(equalTo: trailingAnchor, constant: -12),
+        ])
+        frame.size.width = max(240, label.intrinsicContentSize.width + 36 + buttonsWidth)
+        refresh()
+    }
+    required init?(coder: NSCoder) { fatalError() }
+
+    func refresh() {
+        label.stringValue = title; label.textColor = disabled ? .tertiaryLabelColor : .labelColor
+        let tip = T(disabled ? "common.enable" : "common.disable")
+        toggle.image = NSImage(systemSymbolName: disabled ? "play.circle" : "pause.circle", accessibilityDescription: tip); toggle.toolTip = tip
+        toggle.contentTintColor = disabled ? .controlAccentColor : .secondaryLabelColor
+        setAccessibilityLabel(disabled ? T("item.disabledLabel", title) : title)
+        label.sizeToFit()
+        frame.size.width = max(frame.size.width, label.frame.width + 36 + buttonsWidth)
+    }
+    @objc func toggled() { disabled = onToggle() }
+    @objc func tested() { enclosingMenuItem?.menu?.cancelTracking(); if let onTest { DispatchQueue.main.async(execute: onTest) } }
+    @objc func edited() { enclosingMenuItem?.menu?.cancelTracking(); DispatchQueue.main.async(execute: onEdit) }
+    @objc func deleted() { enclosingMenuItem?.menu?.cancelTracking(); DispatchQueue.main.async(execute: onDelete) }
 }
 
 final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
@@ -387,6 +724,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     let menu = NSMenu()
     // Titles are set in retitle(), again whenever the language changes.
     let lastLine = NSMenuItem(title: "", action: nil, keyEquivalent: "")
+    let nextLine = NSMenuItem(title: "", action: nil, keyEquivalent: "")
     let holidayLine = NSMenuItem(title: "", action: nil, keyEquivalent: "")
     // Today's status, one fact per line; a line is hidden when it has nothing to say.
     let todayLine = NSMenuItem(title: "", action: nil, keyEquivalent: "")
@@ -395,17 +733,19 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     let permLine = NSMenuItem(title: "", action: #selector(openPrivacy), keyEquivalent: "")
     let leaveRoot = NSMenuItem(title: "", action: nil, keyEquivalent: "")
     let overtimeRoot = NSMenuItem(title: "", action: nil, keyEquivalent: "")
-    let breakRoot = NSMenuItem(title: "", action: nil, keyEquivalent: "")
-    let sectionNames = ["leave": "section.leave", "overtime": "section.overtime", "break": "section.breaks"]
+    let periodRoot = NSMenuItem(title: "", action: nil, keyEquivalent: "")
+    let tasksRoot = NSMenuItem(title: "", action: nil, keyEquivalent: "")
+    weak var openForm: NSAlert?
+    // Open reminder pop-ups with the targets of their OK buttons, kept until closed.
+    var reminderAlerts: [(NSAlert, ClosureTarget)] = []
+    var lastReminderMinute = ""
+    let sectionNames = ["leave": "section.leave", "overtime": "section.overtime", "periods": "section.periods", "tasks": "section.tasks"]
     // Sections expand in place under their heading; which ones are open survives restarts (older versions saved the Chinese names).
-    var expanded = Set((UserDefaults.standard.stringArray(forKey: "expanded") ?? []).map { ["休假": "leave", "加班": "overtime", "休息时间": "break"][$0] ?? $0 })
+    var expanded = Set((UserDefaults.standard.stringArray(forKey: "expanded") ?? []).map { ["休假": "leave", "加班": "overtime", "休息时间": "periods", "break": "periods"][$0] ?? $0 })
     var sectionRows: [String: [NSMenuItem]] = [:]
     var sectionCount: [String: Int] = [:]
     let pauseItem = NSMenuItem(title: "", action: #selector(togglePause), keyEquivalent: "p")
-    let intervalItem = NSMenuItem(title: "", action: #selector(setInterval), keyEquivalent: "i")
     let workHoursItem = NSMenuItem(title: "", action: #selector(setWorkHours), keyEquivalent: "")
-    let lockItem = NSMenuItem(title: "", action: #selector(toggleLocked(_:)), keyEquivalent: "")
-    let nowItem = NSMenuItem(title: "", action: #selector(nudgeNow), keyEquivalent: "n")
     let refetchItem = NSMenuItem(title: "", action: #selector(refetchHolidays), keyEquivalent: "")
     let clearSourceItem = NSMenuItem(title: "", action: #selector(clearHolidaySource), keyEquivalent: "")
     let logItem = NSMenuItem(title: "", action: #selector(openLog), keyEquivalent: "")
@@ -419,6 +759,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     // The last run's time and result key, kept so the line can be retitled in another language.
     var lastRun: (time: String, result: String)?
     var paused = UserDefaults.standard.bool(forKey: "paused")
+    // Timed pop-ups due while paused, asleep or with the app quit, kept across restarts until they are listed together.
+    var missed: [(at: Date, text: String)] = (UserDefaults.standard.stringArray(forKey: "missed") ?? []).compactMap { s in
+        let p = s.split(separator: "\t", maxSplits: 1)
+        return p.count == 2 ? Double(p[0]).map { (Date(timeIntervalSince1970: $0), String(p[1])) } : nil
+    }
+    // The last minute looked at, so the minutes slept through are known.
+    var lastSeen = UserDefaults.standard.object(forKey: "lastSeen") as? Date
     var next = Date.distantFuture
     var fetching = false
     // Holidays are only fetched online; coming back online checks again. A failed automatic fetch waits an hour.
@@ -426,35 +773,47 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     var online = false
     var autoFetchFailed: Date?
     var languagesWatch: DispatchSourceFileSystemObject?
+    // Watched apps are checked every few seconds; whether each app (by path) was wanted at the last check.
+    // Missing until the first check, so launching after hours closes nothing.
+    var appWasWanted: [String: Bool] = [:]
+    var lastAppCheck = Date.distantPast
+    var appLaunchTried: [String: Date] = [:]
     let fmt: DateFormatter = { let f = DateFormatter(); f.dateFormat = "HH:mm"; return f }()
 
     func applicationDidFinishLaunching(_ n: Notification) {
         item.button?.font = .monospacedDigitSystemFont(ofSize: NSFont.systemFontSize, weight: .regular)
-        for i in [lastLine, todayLine, overtimeLine, breakLine] { i.isEnabled = false }
+        for i in [lastLine, nextLine, todayLine, overtimeLine, breakLine] { i.isEnabled = false }
         holidayLine.submenu = NSMenu(); holidayLine.submenu!.delegate = self
         loadCustomLanguages(); applyLanguageChoice(); reportLanguageProblems(); watchLanguagesFolder()
-        for i in [permLine, pauseItem, intervalItem, workHoursItem, lockItem, nowItem, refetchItem, clearSourceItem, logItem, clearLogItem, autoClearItem, loginItem, sourceItem] { i.target = self }
-        let (now, more, quit) = (nowItem, moreItem, quitItem)
+        for i in [permLine, pauseItem, workHoursItem, refetchItem, clearSourceItem, logItem, clearLogItem, autoClearItem, loginItem, sourceItem] { i.target = self }
+        let (more, quit) = (moreItem, quitItem)
         more.submenu = NSMenu(); languageItem.submenu = NSMenu(); languageItem.submenu!.delegate = self
-        loginItem.state = SMAppService.mainApp.status == .enabled ? .on : .off
-        lockItem.state = nudgeWhenLocked ? .on : .off
+        loginItem.state = loginAgentOn ? .on : .off
         autoClearItem.state = autoClearLog ? .on : .off
-        [loginItem, lockItem, languageItem, .separator(), sourceItem, refetchItem, clearSourceItem, .separator(), logItem, clearLogItem, autoClearItem].forEach(more.submenu!.addItem)
-        for (root, key, sym) in [(leaveRoot, "leave", "airplane"), (overtimeRoot, "overtime", "briefcase"), (breakRoot, "break", "cup.and.saucer")] {
+        [loginItem, languageItem, .separator(), sourceItem, refetchItem, clearSourceItem, .separator(), logItem, clearLogItem, autoClearItem].forEach(more.submenu!.addItem)
+        for (root, key, sym) in [(leaveRoot, "leave", "airplane"), (overtimeRoot, "overtime", "briefcase"), (periodRoot, "periods", "calendar.day.timeline.left"), (tasksRoot, "tasks", "bell")] {
             root.representedObject = key
             let v = SectionHeaderView(symbol: sym); v.onClick = { [weak self, weak root] in if let root { self?.toggleSection(root) } }
             root.view = v
         }
-        for (i, sym) in [(pauseItem, "pause.circle"), (now, "cursorarrow.motionlines"), (intervalItem, "timer"), (workHoursItem, "clock"), (more, "ellipsis.circle")] {
+        for (i, sym) in [(pauseItem, "pause.circle"), (workHoursItem, "clock"), (more, "ellipsis.circle")] {
             i.image = NSImage(systemSymbolName: sym, accessibilityDescription: nil)
         }
-        [lastLine, holidayLine, todayLine, overtimeLine, breakLine, permLine, .separator(), pauseItem, now, .separator(), leaveRoot, overtimeRoot, breakRoot, workHoursItem, intervalItem, .separator(), more, quit].forEach(menu.addItem)
+        [lastLine, nextLine, holidayLine, todayLine, overtimeLine, breakLine, permLine, .separator(), pauseItem, .separator(), leaveRoot, overtimeRoot, periodRoot, tasksRoot, .separator(), more, quit].forEach(menu.addItem)
         item.menu = menu
         loadHolidays()
         loadLeaves()
         loadJSON(overtimeURL, into: &overtimes)
-        if FileManager.default.fileExists(atPath: breaksURL.path) { loadJSON(breaksURL, into: &breaks) }
-        else { breaks = [Break(from: "12:00", to: "13:00", note: T("break.lunch"), rule: nil)]; saveJSON(breaks, to: breaksURL) }
+        if FileManager.default.fileExists(atPath: periodsURL.path) { loadJSON(periodsURL, into: &periods) }
+        else { periods = [Period(from: "12:00", to: "13:00", note: T("break.lunch"), rule: nil)]; saveJSON(periods, to: periodsURL) }
+        // A Mac that nudged before tasks existed keeps nudging at its interval; a fresh install has no nudge.
+        if FileManager.default.fileExists(atPath: jobsURL.path) { loadJSON(jobsURL, into: &jobs) }
+        else {
+            let v = UserDefaults.standard.integer(forKey: "intervalMinutes")
+            jobs = defaultJobs(nudging: UserDefaults.standard.bool(forKey: "workRemindersAdded"), interval: (1...240).contains(v) ? v : 10); saveJSON(jobs, to: jobsURL)
+        }
+        applyNudge()
+        catchUp(Date())
         pruneExpired()
         holidayLine.title = T("status.holidaysLoading")
         retitle()
@@ -468,26 +827,27 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         }
         network.start(queue: .global(qos: .utility))
         next = nextSlot(after: Date())
-        _ = AXIsProcessTrustedWithOptions([kAXTrustedCheckOptionPrompt.takeUnretainedValue() as String: true] as CFDictionary)
+        if nudging { askAccessibility() }
         NSWorkspace.shared.notificationCenter.addObserver(self, selector: #selector(didWake), name: NSWorkspace.didWakeNotification, object: nil)
-        Timer.scheduledTimer(withTimeInterval: 1, repeats: true) { [weak self] _ in self?.tick() }.tolerance = 0.2
+        // Common modes, so the countdown in the menu keeps going while the menu is open.
+        let timer = Timer(timeInterval: 1, repeats: true) { [weak self] _ in self?.tick() }; timer.tolerance = 0.2
+        RunLoop.main.add(timer, forMode: .common)
         tick()
     }
 
     // Every title, in the current language; the section rows are rebuilt.
     func retitle() {
         permLine.title = T("status.needAccessibility")
-        nowItem.title = T("menu.nudgeNow"); refetchItem.title = T("menu.refetchHolidays"); clearSourceItem.title = T("menu.unsubscribeHoliday"); logItem.title = T("menu.openLog")
+        refetchItem.title = T("menu.refetchHolidays"); clearSourceItem.title = T("menu.unsubscribeHoliday"); logItem.title = T("menu.openLog")
         moreItem.title = T("menu.more"); loginItem.title = T("menu.openAtLogin"); sourceItem.title = T("menu.subscribeHoliday")
         quitItem.title = T("menu.quit")
         // Always says "Language" too, so someone stuck in a language they can't read still finds it.
         languageItem.title = T("menu.language") == "Language" ? "Language" : T("menu.language") + " / Language"
-        intervalItem.title = T("menu.interval", String(intervalMinutes))
-        workHoursItem.title = T("menu.workHours", workStart, endText(workStart, workEnd)); lockItem.title = T("menu.nudgeWhenLocked")
+        workHoursItem.title = workHoursTitle()
         clearLogItem.title = T("menu.clearLog"); autoClearItem.title = T("menu.autoClearLog")
         lastLine.title = lastRun.map { T("status.last", $0.time, T($0.result)) } ?? T("status.lastNever")
         if fetching { holidayLine.title = T("status.holidaysFetching") }
-        rebuildLeaveMenu(); rebuildOvertimeMenu(); rebuildBreakMenu()
+        rebuildLeaveMenu(); rebuildOvertimeMenu(); rebuildPeriodMenu(); rebuildTasksMenu()
         tick()
     }
 
@@ -530,7 +890,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
             NSApp.activate(ignoringOtherApps: true)
             let a = NSAlert(); a.alertStyle = .warning; a.messageText = T("language.problemTitle")
             a.informativeText = fresh.joined(separator: "\n") + "\n\n" + T("language.problemHelp")
-            a.addButton(withTitle: T("language.openFolder")); a.addButton(withTitle: T("common.ok"))
+            a.addButton(withTitle: T("language.openFolder")); a.addButton(withTitle: T("common.ok")).keyEquivalent = "\u{1b}"
             if a.runModal() == .alertFirstButtonReturn { self?.openLanguagesFolder() }
         }
     }
@@ -588,7 +948,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         }
     }
 
-    // One-off leave, overtime and breaks are removed once their last day (and end time, if any) has passed.
+    // One-off leave, overtime and periods are removed once their last day (and end time, if any) has passed.
     // Repeating ones stay. Checked at launch and whenever the minute changes.
     var lastPrune = ""
     func pruneExpired() {
@@ -602,16 +962,67 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         }
         let l = leaves.filter { over($0.end, $0.from, $0.to) }, o = overtimes.filter(otOver)
         func otOver(_ o: Overtime) -> Bool { o.until != nil ? over(o.until, nil, o.to) : over(onceDay(o.rule) ?? (o.rule == nil ? o.end : nil), o.from, o.to) }
-        let b = breaks.filter { over(onceDay($0.rule), $0.from, $0.to) }
+        let b = periods.filter { over(onceDay($0.rule), $0.from, $0.to) }
         if !l.isEmpty { leaves.removeAll { over($0.end, $0.from, $0.to) }; saveLeaves(); rebuildLeaveMenu(); l.forEach { appendLog(T("log.leaveExpired", label($0))) } }
         if !o.isEmpty { overtimes.removeAll(where: otOver); saveJSON(overtimes, to: overtimeURL); rebuildOvertimeMenu(); o.forEach { appendLog(T("log.overtimeExpired", otLabel($0))) } }
-        if !b.isEmpty { breaks.removeAll { over(onceDay($0.rule), $0.from, $0.to) }; saveJSON(breaks, to: breaksURL); rebuildBreakMenu(); b.forEach { appendLog(T("log.breakExpired", breakLabel($0))) } }
+        if !b.isEmpty {
+            periods.removeAll { over(onceDay($0.rule), $0.from, $0.to) }; saveJSON(periods, to: periodsURL); rebuildPeriodMenu()
+            b.forEach { appendLog(T("log.periodExpired", periodLabel($0))); dropFollowers(of: $0) }
+        }
+        // A one-off timed task goes once its minute has passed (tick runs it before pruning).
+        func done(_ j: Job) -> Bool { j.when == "at" && over(onceDay(j.rule), nil, j.at) }
+        let r = jobs.filter(done)
+        if !r.isEmpty { jobs.removeAll(where: done); saveJSON(jobs, to: jobsURL); rebuildTasksMenu(); r.forEach { appendLog(T("log.taskExpired", jobLabel($0))) } }
+    }
+
+    func saveMissed() { UserDefaults.standard.set(missed.map { "\($0.at.timeIntervalSince1970)\t\($0.text)" }, forKey: "missed") }
+    // Of what was missed, only timed pop-ups wait to be listed: a start, an end or a pop-up every few minutes means nothing
+    // once its moment has gone. Shortcuts, links and commands are not run later, only logged.
+    func noteMissed(_ due: [(at: Date, job: Job, text: String)]) {
+        for x in due {
+            if x.job.action == "notify" { if x.job.when == "at" { missed.append((x.at, x.text)) } }
+            else { appendLog(T("log.taskMissed", jobLabel(x.job))) }
+        }
+        saveMissed()
+    }
+    // Notes what came due in the minutes between the last one looked at and `now` (asleep, or the app quit), before
+    // pruning drops one-off tasks whose time has passed.
+    func catchUp(_ now: Date) {
+        let m = Calendar.current.dateInterval(of: .minute, for: now)!.start
+        if let l = lastSeen, m.timeIntervalSince(l) > 60 {
+            let due = dueBetween(after: l, upTo: m - 60)
+            if !due.isEmpty { noteMissed(due) }
+        }
+        lastSeen = m; UserDefaults.standard.set(m, forKey: "lastSeen")
     }
 
     func tick() {
         let now = Date()
+        let minute = dayKey.string(from: now) + " " + hmFmt.string(from: now)
+        if minute != lastReminderMinute {
+            lastReminderMinute = minute
+            catchUp(now)
+            // Paused, every task waits and is only listed on resume; all pop-ups due this minute share one window.
+            let due = jobsDue(now)
+            if paused { noteMissed(due.map { (now, $0.job, $0.text) }) }
+            else {
+                let pops = due.filter { $0.job.action == "notify" }.map(\.text)
+                if !pops.isEmpty { showReminder(pops); appendLog(T("log.reminderShown", pops.joined(separator: T("common.listSeparator")))) }
+                due.filter { $0.job.action != "notify" }.forEach { perform($0.job) }
+            }
+        }
+        // Only today's are listed; nothing is shown after days away.
+        if !paused && !missed.isEmpty {
+            let lines = missed.filter { Calendar.current.isDateInToday($0.at) }.map { hmFmt.string(from: $0.at) + "  " + $0.text }
+            if !lines.isEmpty { showReminder(lines, title: T("reminder.missed")); appendLog(T("log.missedShown", lines.joined(separator: T("common.listSeparator")))) }
+            missed = []; saveMissed()
+        }
         if hmFmt.string(from: now) != lastPrune { pruneExpired() }
-        permLine.isHidden = AXIsProcessTrusted()
+        if !paused && now.timeIntervalSince(lastAppCheck) >= 10 { checkApps() }
+        // The nudge lines show only while the nudge is on; pausing holds the nudge and every task, apps included.
+        for i in [lastLine, nextLine] { i.isHidden = !nudging }
+        permLine.isHidden = !nudging || AXIsProcessTrusted()
+        pauseItem.isHidden = !jobs.contains { $0.disabled != true }
         // With no source there is nothing to refetch or clear.
         refetchItem.isHidden = holidaySource.isEmpty; clearSourceItem.isHidden = holidaySource.isEmpty
         pauseItem.title = paused ? T("menu.resume") : T("menu.pause")
@@ -626,32 +1037,82 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
             let ots = overtime(on: dayBefore(now)).filter { $0.until == nil && spanCovers($0.from, $0.to, hm, startedToday: false) } + overtime(on: now)
             let ot = ots.map { otSpanText($0) + ($0.note.isEmpty ? "" : " " + $0.note) }
             overtimeLine.title = T("status.overtimeToday", ot.joined(separator: T("common.listSeparator"))); overtimeLine.isHidden = ot.isEmpty
-            let late = breaksOn(dayBefore(now)).filter { spanCovers($0.from, $0.to, hm, startedToday: false) }
-            let br = late.map { ($0, false) } + breaksOn(now).map { ($0, true) }
-            let brText = br.map { b, today in spanText(b.from, b.to) + (b.note.isEmpty ? "" : " " + b.note) + (spanCovers(b.from, b.to, hm, startedToday: today) ? T("status.onBreak") : "") }
+            // Lunch and the periods the nudge is quiet in, while it is on.
+            let quiet = { (d: Date) in nudging ? skipsOn(nudgeJob, d) : [] }
+            let late = quiet(dayBefore(now)).filter { spanCovers($0.from, $0.to, hm, startedToday: false) }
+            let br = late.map { ($0, false) } + quiet(now).map { ($0, true) }
+            let lunchToday = nudging && (!lunchSpans(now).isEmpty || covered(now, lunchSpans))
+            let lunchText = lunchToday ? [spanText(lunchStart, lunchEnd) + " " + T("form.lunch") + (covered(now, lunchSpans) ? T("status.onBreak") : "")] : []
+            let brText = (lunchText + br.map { b, today in spanText(b.from, b.to) + (b.note.isEmpty ? "" : " " + b.note) + (spanCovers(b.from, b.to, hm, startedToday: today) ? T("status.onBreak") : "") })
             breakLine.title = T("status.breaks", brText.joined(separator: T("common.listSeparator"))); breakLine.isHidden = brText.isEmpty
             // Only this year is shown, even in December; later years stay in the data for scheduling.
             let year = String(k.prefix(4))
-            let span = holidays.years.contains(Int(year)!) ? { let ks = holidays.days.keys.filter { $0.hasPrefix(year) }; return T("status.holidaysLeft", year, String(ks.filter { $0 >= k }.count), String(ks.count)) }() : holidaySource.isEmpty ? T("status.holidaysNotSubscribed") : T("status.holidaysNoData", year)
+            // Days to the next holiday after today, looking into next year's data too.
+            let untilNext = holidays.days.keys.filter { $0 > k }.min().flatMap(dayKey.date(from:)).flatMap { Calendar.current.dateComponents([.day], from: Calendar.current.startOfDay(for: now), to: $0).day }
+            let span = holidays.years.contains(Int(year)!) ? { let ks = holidays.days.keys.filter { $0.hasPrefix(year) }; return T("status.holidaysLeft", String(ks.filter { $0 >= k }.count), String(ks.count)) + (untilNext.map { T("status.holidaysNext", String($0)) } ?? "") }() : holidaySource.isEmpty ? T("status.holidaysNotSubscribed") : T("status.holidaysNoData", year)
             holidayLine.title = T("status.holidays", span)
         }
         if now >= next {
             // After sleep the slot may be long past; only run a slot that is due right now.
-            if !paused && now.timeIntervalSince(next) < 60 { run(manual: false) }
+            if !paused && nudging && now.timeIntervalSince(next) < 60 { run(manual: false) }
             next = slot(after: next, now: now)
         }
         let left = Int(next.timeIntervalSince(now))
-        let title: String
-        if paused { title = "🖱 " + T("status.paused") }
-        else if left < 3600 { title = String(format: "🖱 %d:%02d", left / 60, left % 60) }
-        // Off hours just the icon, to keep the menu bar narrow; the next time is in the tooltip.
-        else if !inWindow(now) { title = "🖱" }
-        else if Calendar.current.isDateInToday(next) { title = "🖱 " + fmt.string(from: next) }
-        else { title = "🖱 " + localFmt("MdEEEHHmm").string(from: next) }
+        // Count down only during work hours or overtime (including the last step that runs past the end), not before work starts.
+        let counting = inWindow(now) || inWindow(next - interval)
+        let nextText: String
+        if paused { nextText = T("status.paused") }
+        else if left < 3600 && counting { nextText = T("status.nextCountdown", String(format: "%02d:%02d", left / 60, left % 60)) }
+        else if Calendar.current.isDateInToday(next) { nextText = fmt.string(from: next) }
+        else { nextText = localFmt("MdEEEHHmm").string(from: next) }
+        if nextLine.title != T("status.next", nextText) { nextLine.title = T("status.next", nextText) }
+        // The menu bar shows no clock: the icon fills from the top as the next nudge comes closer, and a countdown appears only
+        // shortly before a break or reminder. With the nudge off it fills as the current stretch of work goes by.
+        setIcon(!nudging ? workProgress(now) : paused || !counting ? 0 : 1 - Double(left) / interval)
+        var title = paused ? T("status.paused") : ""
+        if !paused, let e = upcomingEvent(after: now, within: 600) {
+            let s = Int(e.at.timeIntervalSince(now).rounded(.up)), name = e.name.count > 8 ? e.name.prefix(7) + "…" : e.name
+            title = name + String(format: " %d:%02d", s / 60, s % 60)
+        }
+        if !title.isEmpty { title = " " + title }
         if item.button?.title != title { item.button?.title = title }
-        let tip = paused ? nil : T("status.nextNudge", localFmt("MdEEEHHmm").string(from: next))
+        let tip = paused || !nudging ? nil : T("status.nextNudge", localFmt("MdEEEHHmm").string(from: next))
         if item.button?.toolTip != tip { item.button?.toolTip = tip }
     }
+
+    // The 🖱 emoji, drawn once at twice the menu bar size, with the rows its drawing actually covers (the glyph box has
+    // empty space above and below). It fills from the top down as the next nudge comes closer: the filled part is the
+    // emoji as it is, the rest faded. Off hours and while paused it is faded all over.
+    lazy var mouseEmoji: (rep: NSBitmapImageRep, top: CGFloat, bottom: CGFloat) = {
+        let s = NSAttributedString(string: "🖱", attributes: [.font: NSFont.systemFont(ofSize: NSFont.systemFontSize)])
+        let size = s.size()
+        let rep = NSBitmapImageRep(bitmapDataPlanes: nil, pixelsWide: Int(ceil(size.width * 2)), pixelsHigh: Int(ceil(size.height * 2)), bitsPerSample: 8,
+                                   samplesPerPixel: 4, hasAlpha: true, isPlanar: false, colorSpaceName: .deviceRGB, bytesPerRow: 0, bitsPerPixel: 0)!
+        rep.size = size
+        NSGraphicsContext.saveGraphicsState(); NSGraphicsContext.current = NSGraphicsContext(bitmapImageRep: rep); s.draw(at: .zero); NSGraphicsContext.restoreGraphicsState()
+        let rows = (0..<rep.pixelsHigh).filter { y in (0..<rep.pixelsWide).contains { (rep.colorAt(x: $0, y: y)?.alphaComponent ?? 0) > 0.1 } }
+        let (first, last) = (rows.first ?? 0, rows.last ?? rep.pixelsHigh - 1)
+        return (rep, size.height - CGFloat(first) / 2, size.height - CGFloat(last + 1) / 2)
+    }()
+    var iconFill = -1.0
+    func setIcon(_ progress: Double) {
+        let fill = (min(max(progress, 0), 1) * 50).rounded() / 50
+        guard fill != iconFill else { return }
+        iconFill = fill
+        let e = mouseEmoji
+        let image = NSImage(size: e.rep.size, flipped: false) { r in
+            e.rep.draw(in: r, from: .zero, operation: .sourceOver, fraction: 0.3, respectFlipped: true, hints: nil)
+            let y = e.top - (e.top - e.bottom) * fill
+            NSRect(x: 0, y: y, width: r.width, height: r.height - y).clip()
+            e.rep.draw(in: r, from: .zero, operation: .sourceOver, fraction: 1, respectFlipped: true, hints: nil)
+            return true
+        }
+        image.accessibilityDescription = "Shiftbell"
+        item.button?.image = image; item.button?.imagePosition = .imageLeading
+    }
+
+    // Only the nudge needs it; asked at launch and when the nudge is turned on.
+    func askAccessibility() { _ = AXIsProcessTrustedWithOptions([kAXTrustedCheckOptionPrompt.takeUnretainedValue() as String: true] as CFDictionary) }
 
     func run(manual: Bool) {
         checkHolidays()
@@ -687,21 +1148,38 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         (root.view as? SectionHeaderView)?.set(title: n == 0 ? name : T("common.withCount", name, String(n)), open: expanded.contains(key))
     }
 
-    // Rebuilds a section's rows right under its heading: one row per entry (click to delete), then the add item.
-    func fill(_ root: NSMenuItem, _ rows: [String], remove: Selector, add: (String, Selector, String)) {
+    // Rebuilds a section's rows right under its heading: one row per entry (with edit, turn off/on and delete buttons), then
+    // the add item and any extra items. `head` items go first, as they are. `toggle` flips entry i and returns whether it is now off; `edit` opens its form;
+    // `remove` asks, then deletes.
+    func fill(_ root: NSMenuItem, _ rows: [(String, Bool)], toggle: @escaping (Int) -> Bool, edit: @escaping (Int) -> Void, remove: @escaping (Int) -> Void,
+              add: (String, Selector, String), head: [NSMenuItem] = [], extra: [NSMenuItem] = [], test: ((Int) -> Void)? = nil) {
         let name = root.representedObject as! String
         sectionRows[name]?.forEach { if $0.menu != nil { menu.removeItem($0) } }
-        var items: [NSMenuItem] = rows.enumerated().map { i, t in
-            let it = NSMenuItem(title: t, action: remove, keyEquivalent: ""); it.target = self; it.tag = i; it.toolTip = T("menu.clickToDelete")
-            it.image = NSImage(systemSymbolName: "minus.circle", accessibilityDescription: T("common.delete")); return it
+        var items: [NSMenuItem] = head + rows.enumerated().map { i, r in
+            let it = NSMenuItem(title: r.0, action: nil, keyEquivalent: "")
+            it.view = EntryRowView(title: r.0, disabled: r.1, onToggle: { toggle(i) }, onEdit: { edit(i) }, onDelete: { remove(i) }, onTest: test.map { t in { t(i) } }); return it
         }
-        if rows.isEmpty { let none = NSMenuItem(title: T("menu.none"), action: nil, keyEquivalent: ""); none.isEnabled = false; items.append(none) }
+        if rows.isEmpty && head.isEmpty { let none = NSMenuItem(title: T("menu.none"), action: nil, keyEquivalent: ""); none.isEnabled = false; items.append(none) }
         let a = NSMenuItem(title: add.0, action: add.1, keyEquivalent: add.2); a.target = self
-        a.image = NSImage(systemSymbolName: "plus.circle", accessibilityDescription: nil); items.append(a)
+        a.image = NSImage(systemSymbolName: "plus.circle", accessibilityDescription: nil); items.append(a); items += extra
         let at = menu.index(of: root) + 1
         for (i, it) in items.enumerated() { it.indentationLevel = 1; it.isHidden = !expanded.contains(name); menu.insertItem(it, at: at + i) }
         sectionRows[name] = items; sectionCount[name] = rows.count
         setHeading(root)
+    }
+
+    // Turns an entry off or on, logs it and re-plans the next nudge; returns the new state.
+    func flip(_ disabled: inout Bool?, _ label: String) -> Bool {
+        let off = disabled != true; disabled = off ? true : nil
+        appendLog(T(off ? "log.itemDisabled" : "log.itemEnabled", label))
+        return off
+    }
+    func replan() { next = nextSlot(after: Date()); tick() }
+    // Saves a form's result: puts it where the entry it edits is now (the list may have been re-sorted or pruned while the
+    // form was open), or adds it. Logs the change with `label`.
+    func put<E: Equatable>(_ new: E, over old: E?, in list: inout [E], label: (E) -> String, added: String) {
+        if let o = old, let i = list.firstIndex(of: o) { list[i] = new } else { list.append(new) }
+        appendLog(old.map { T("log.itemEdited", label($0), label(new)) } ?? T(added, label(new)))
     }
 
     func toggleSection(_ sender: NSMenuItem) {
@@ -715,10 +1193,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     // Lists current and upcoming leave by start date; finished leave is removed by pruneExpired.
     func rebuildLeaveMenu() {
         leaves.sort { $0.start < $1.start }
-        fill(leaveRoot, leaves.map(label), remove: #selector(removeLeave(_:)), add: (T("menu.addLeave"), #selector(addLeave), "l"))
+        fill(leaveRoot, leaves.map { (label($0), $0.disabled == true) }, toggle: { [unowned self] i in
+            defer { saveLeaves(); replan() }; return flip(&leaves[i].disabled, label(leaves[i]))
+        }, edit: { [unowned self] in editLeave(leaves[$0]) }, remove: removeLeave, add: (T("menu.addLeave"), #selector(addLeave), "l"))
     }
 
-    @objc func addLeave() {
+    @objc func addLeave() { editLeave(nil) }
+    // The add form, or with `old` the same form filled in from it.
+    func editLeave(_ old: Leave?) {
         // Morning / Afternoon split the shift at 13:00, or at its middle when 13:00 is not inside it (night shifts).
         let mid: String = {
             if !overnight(workStart, workEnd) && workStart < "13:00" && "13:00" < workEnd { return "13:00" }
@@ -728,33 +1210,41 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         let from = datePicker(), to = datePicker(), part = NSPopUpButton(), t1 = timePicker(workStart), t2 = timePicker(mid), note = noteField()
         part.addItems(withTitles: ["leave.allDay", "leave.morning", "leave.afternoon", "leave.custom"].map { T($0) })
         note.placeholderString = T("leave.notePlaceholder")
-        // Morning / Afternoon fill in the usual half day; the times stay editable for anything other than All day.
-        let sync = ClosureTarget {
+        if let o = old {
+            from.dateValue = dayKey.date(from: o.start) ?? Date(); to.dateValue = dayKey.date(from: o.end) ?? Date(); note.stringValue = o.note
+            if let f = o.from, let t = o.to {
+                part.selectItem(at: f == workStart && t == mid ? 1 : f == mid && t == workEnd ? 2 : 3)
+                t1.dateValue = hmFmt.date(from: f)!; t2.dateValue = hmFmt.date(from: t)!
+            }
+        }
+        // Morning / Afternoon fill in the usual half day; the times show, and can be changed, for anything other than All day.
+        let sync = ClosureTarget { [unowned self] in
             let i = part.indexOfSelectedItem
             if i == 1 { t1.dateValue = hmFmt.date(from: workStart)!; t2.dateValue = hmFmt.date(from: mid)! }
             if i == 2 { t1.dateValue = hmFmt.date(from: mid)!; t2.dateValue = hmFmt.date(from: workEnd)! }
-            t1.isEnabled = i != 0; t2.isEnabled = i != 0
+            t1.isHidden = i == 0; t2.isHidden = i == 0
+            self.refitForm(part)
         }
         part.target = sync; part.action = #selector(ClosureTarget.fire); sync.fire()
         defer { withExtendedLifetime(sync) {} }
-        guard form(T("menu.addLeave"), T("leave.help") + " " + T("help.overnight"),
+        guard form(T(old == nil ? "menu.addLeave" : "edit.leave"), sentences(T("leave.help"), T("help.overnight")),
                    [(T("form.start"), from), (T("form.end"), to), (T("form.time"), part), (T("form.from"), t1), (T("form.to"), t2), (T("form.note"), note)],
+                   button: old == nil ? nil : T("common.save"),
                    check: { part.indexOfSelectedItem == 0 || hmFmt.string(from: t2.dateValue) != hmFmt.string(from: t1.dateValue) ? nil : T("error.sameStartEnd") }) else { return }
         var s = dayKey.string(from: from.dateValue), e = dayKey.string(from: to.dateValue)
         if e < s { swap(&s, &e) }
         let whole = part.indexOfSelectedItem == 0
         let l = Leave(start: s, end: e, note: note.stringValue.trimmingCharacters(in: .whitespaces),
-                      from: whole ? nil : hmFmt.string(from: t1.dateValue), to: whole ? nil : hmFmt.string(from: t2.dateValue))
-        leaves.append(l); saveLeaves(); rebuildLeaveMenu()
-        appendLog(T("log.leaveAdded", label(l)))
-        next = nextSlot(after: Date()); tick()
+                      from: whole ? nil : hmFmt.string(from: t1.dateValue), to: whole ? nil : hmFmt.string(from: t2.dateValue), disabled: old?.disabled)
+        put(l, over: old, in: &leaves, label: label, added: "log.leaveAdded")
+        saveLeaves(); rebuildLeaveMenu(); replan()
     }
 
-    @objc func removeLeave(_ sender: NSMenuItem) {
-        guard leaves.indices.contains(sender.tag) else { return }
-        let l = leaves[sender.tag]
+    func removeLeave(_ i: Int) {
+        guard leaves.indices.contains(i) else { return }
+        let l = leaves[i]
         guard confirmRemove(T("confirm.deleteLeave"), label(l)) else { return }
-        leaves.remove(at: sender.tag); saveLeaves(); rebuildLeaveMenu()
+        leaves.remove(at: i); saveLeaves(); rebuildLeaveMenu()
         appendLog(T("log.leaveDeleted", label(l)))
         next = nextSlot(after: Date()); tick()
     }
@@ -774,16 +1264,23 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         let p = NSDatePicker(); p.datePickerStyle = .textFieldAndStepper; p.datePickerElements = .yearMonthDay
         p.presentsCalendarOverlay = true; p.locale = appLocale; p.dateValue = Date(); p.sizeToFit(); return p
     }
-    // Shows a form; returns false on cancel. `check` returns an error message to keep the form open, or nil to accept.
+    // Shows a form; returns false on cancel. Cancel buttons here and in the other dialogs take Esc themselves: NSAlert only
+    // does that for a button titled "Cancel" in English. `check` returns an error message to keep the form open, or nil to accept.
     func form(_ title: String, _ info: String, _ rows: [(String, NSView)], button: String? = nil, check: () -> String?) -> Bool {
         NSApp.activate(ignoringOtherApps: true)
         // Pickers and pop-ups all take the date picker's width; text fields keep their own.
         let w = datePicker().fittingSize.width
         for (_, v) in rows where v is NSDatePicker || v is NSPopUpButton { v.widthAnchor.constraint(equalToConstant: w).isActive = true }
+        // The grid shows every view it is given, so carry over which fields start hidden.
+        let hidden = rows.map { $0.1.isHidden }
         let grid = NSGridView(views: rows.map { [NSTextField(labelWithString: $0.0), $0.1] })
-        grid.rowSpacing = 8; grid.yPlacement = .center; grid.frame.size = grid.fittingSize
+        for (i, h) in hidden.enumerated() { rows[i].1.isHidden = h }
+        grid.rowSpacing = 8; grid.yPlacement = .center; fitRows(grid)
+        // A list's label lines up with its first item rather than its middle.
+        for (i, r) in rows.enumerated() where r.1 is NSStackView { grid.row(at: i).yPlacement = .top; grid.row(at: i).rowAlignment = .firstBaseline }
         let a = NSAlert(); a.messageText = title; a.informativeText = info
-        a.accessoryView = grid; a.addButton(withTitle: button ?? T("common.add")); a.addButton(withTitle: T("common.cancel"))
+        openForm = a
+        a.accessoryView = grid; a.addButton(withTitle: button ?? T("common.add")); a.addButton(withTitle: T("common.cancel")).keyEquivalent = "\u{1b}"
         a.window.initialFirstResponder = rows.first?.1
         while a.runModal() == .alertFirstButtonReturn {
             guard let err = check() else { return true }
@@ -791,10 +1288,25 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         }
         return false
     }
+    // A form row shows only while its control does, so a choice can show or hide the fields that go with it.
+    func fitRows(_ grid: NSGridView) {
+        for r in 0..<grid.numberOfRows { let row = grid.row(at: r); row.isHidden = row.cell(at: 1).contentView?.isHidden ?? false }
+        // The label column fits the labels of the rows shown; hidden rows would otherwise still widen it, leaving a wide gap
+        // before the fields until the next show or hide.
+        grid.column(at: 0).width = (0..<grid.numberOfRows).filter { !grid.row(at: $0).isHidden }
+            .compactMap { grid.cell(atColumnIndex: 0, rowIndex: $0).contentView?.fittingSize.width }.max() ?? 0
+        // A minimum width keeps the help text above from wrapping into a tall narrow column.
+        let fit = grid.fittingSize; grid.frame.size = NSSize(width: max(fit.width, 360), height: fit.height)
+    }
+    // Call after showing or hiding controls in the open form.
+    func refitForm(_ control: NSView) {
+        guard let grid = control.superview as? NSGridView ?? control.superview?.superview as? NSGridView else { return }
+        fitRows(grid); openForm?.layout()
+    }
     func confirmRemove(_ question: String, _ text: String, ok: String = T("common.delete"), keep: String = T("common.cancel")) -> Bool {
         NSApp.activate(ignoringOtherApps: true)
         let a = NSAlert(); a.messageText = question; a.informativeText = text
-        a.addButton(withTitle: ok); a.addButton(withTitle: keep)
+        a.addButton(withTitle: ok); a.addButton(withTitle: keep).keyEquivalent = "\u{1b}"
         return a.runModal() == .alertFirstButtonReturn
     }
     func pair(_ a: NSView, _ b: NSView) -> NSStackView { let s = NSStackView(views: [a, b]); s.spacing = 6; return s }
@@ -809,24 +1321,31 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     func rebuildOvertimeMenu() {
         // Repeating ones first, then one-offs by date; finished one-offs are removed by pruneExpired.
         overtimes.sort { ($0.start ?? onceDay($0.rule) ?? "", $0.from) < ($1.start ?? onceDay($1.rule) ?? "", $1.from) }
-        fill(overtimeRoot, overtimes.map(otLabel), remove: #selector(removeOvertime(_:)), add: (T("menu.addOvertime"), #selector(addOvertime), "o"))
+        fill(overtimeRoot, overtimes.map { (otLabel($0), $0.disabled == true) }, toggle: { [unowned self] i in
+            defer { saveJSON(overtimes, to: overtimeURL); replan(); rebuildPeriodMenu() }; return flip(&overtimes[i].disabled, otLabel(overtimes[i]))
+        }, edit: { [unowned self] in editOvertime(overtimes[$0]) }, remove: removeOvertime, add: (T("menu.addOvertime"), #selector(addOvertime), "o"))
+        // Periods say whether the nudge runs in them, which depends on overtime.
+        rebuildPeriodMenu()
     }
-    @objc func addOvertime() {
-        let rep = repeatRows(defaultIndex: 1), t1 = timePicker("19:00"), t2 = timePicker("21:00"), note = noteField()
+    @objc func addOvertime() { editOvertime(nil) }
+    func editOvertime(_ old: Overtime?) {
+        let rep = repeatRows(defaultIndex: 1, editing: old.map { ($0.rule, $0.until) })
+        let t1 = timePicker(old?.from ?? "19:00"), t2 = timePicker(old?.to ?? "21:00"), note = noteField()
         defer { withExtendedLifetime(rep.sync) {} }
-        note.placeholderString = T("overtime.notePlaceholder")
-        guard form(T("menu.addOvertime"), T("overtime.help") + " " + T("help.overnight") + " " + T("overtime.multiDayHelp"),
+        note.placeholderString = T("overtime.notePlaceholder"); note.stringValue = old?.note ?? ""
+        guard form(T(old == nil ? "menu.addOvertime" : "edit.overtime"), sentences(T("overtime.help"), T("help.overnight"), T("overtime.multiDayHelp")),
                    // Start and End each put the date beside the time: 11/14 09:00 → 11/15 15:00.
                    rep.rows.filter { $0.1 !== rep.day } + [(T("form.start"), pair(rep.day, t1)), (T("form.end"), pair(rep.endDay, t2)), (T("form.note"), note)],
+                   button: old == nil ? nil : T("common.save"),
                    check: { rep.until() != nil || hmFmt.string(from: t2.dateValue) != hmFmt.string(from: t1.dateValue) ? nil : T("error.sameStartEnd") }) else { return }
-        let o = Overtime(from: hmFmt.string(from: t1.dateValue), to: hmFmt.string(from: t2.dateValue), note: note.stringValue.trimmingCharacters(in: .whitespaces), rule: rep.rule(), until: rep.until())
-        overtimes.append(o); saveJSON(overtimes, to: overtimeURL); rebuildOvertimeMenu()
-        appendLog(T("log.overtimeAdded", otLabel(o)))
-        next = nextSlot(after: Date()); tick()
+        let o = Overtime(from: hmFmt.string(from: t1.dateValue), to: hmFmt.string(from: t2.dateValue), note: note.stringValue.trimmingCharacters(in: .whitespaces),
+                         rule: rep.rule(), until: rep.until(), disabled: old?.disabled)
+        put(o, over: old, in: &overtimes, label: otLabel, added: "log.overtimeAdded")
+        saveJSON(overtimes, to: overtimeURL); rebuildOvertimeMenu(); replan(); checkApps()
     }
-    @objc func removeOvertime(_ sender: NSMenuItem) {
-        guard overtimes.indices.contains(sender.tag), confirmRemove(T("confirm.deleteOvertime"), otLabel(overtimes[sender.tag])) else { return }
-        let o = overtimes.remove(at: sender.tag); saveJSON(overtimes, to: overtimeURL); rebuildOvertimeMenu()
+    func removeOvertime(_ i: Int) {
+        guard overtimes.indices.contains(i), confirmRemove(T("confirm.deleteOvertime"), otLabel(overtimes[i])) else { return }
+        let o = overtimes.remove(at: i); saveJSON(overtimes, to: overtimeURL); rebuildOvertimeMenu()
         appendLog(T("log.overtimeDeleted", otLabel(o)))
         next = nextSlot(after: Date()); tick()
     }
@@ -841,95 +1360,414 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
             case "weekly": when = T("repeat.everyWeekday", wd(Int(arg)))
             case "lastweekday": when = T("repeat.monthlyNth", ordinalName(-1), wd(Int(arg)))
             case "monthly" where p.count == 2: when = T("repeat.monthlyNth", ordinalName(p[0]), wd(p[1]))
+            case "monthday" where p.count == 1: when = T("repeat.monthlyDay", monthDayName(p[0]))
             default: break
             }
         }
         return when
     }
-    func breakLabel(_ b: Break) -> String { "\(ruleLabel(b.rule)) " + spanText(b.from, b.to) + (b.note.isEmpty ? "" : "  " + b.note) }
-    func rebuildBreakMenu() {
-        // Repeating ones first, then one-offs by date; finished one-offs are removed by pruneExpired.
-        breaks.sort { ($0.rule?.hasPrefix("once:") ?? false ? $0.rule! : "", $0.from) < ($1.rule?.hasPrefix("once:") ?? false ? $1.rule! : "", $1.from) }
-        fill(breakRoot, breaks.map(breakLabel), remove: #selector(removeBreak(_:)), add: (T("menu.addBreak"), #selector(addBreak), "b"))
+    func periodLabel(_ p: Period) -> String {
+        "\(ruleLabel(p.rule)) " + spanText(p.from, p.to) + (p.note.isEmpty ? "" : "  " + p.note)
     }
-    // The Repeat/Date/Week/Weekday rows shared by overtime and breaks. Keep `sync` alive while the form is open; `rule` reads the choice.
+    func rebuildPeriodMenu() {
+        // Repeating ones first, then one-offs by date; finished one-offs are removed by pruneExpired.
+        periods.sort { (onceDay($0.rule) ?? "", $0.from) < (onceDay($1.rule) ?? "", $1.from) }
+        // Work hours come first; they can't be turned off or deleted, only edited.
+        // While the nudge is on, each row says whether it pauses there, which is set on the nudge task; a period outside
+        // work hours and overtime gets no word, since the nudge never runs there.
+        let quiet = Set(nudgeJob?.skip ?? [])
+        let tag = { (p: Period) in
+            !nudging ? "" : quiet.contains(p.id) ? T("common.paren", T("period.nudgePaused")) : periodMeetsWork(p) ? T("common.paren", T("period.nudgeKept")) : ""
+        }
+        fill(periodRoot, periods.map { (periodLabel($0) + tag($0), $0.disabled == true) }, toggle: { [unowned self] i in
+            defer { saveJSON(periods, to: periodsURL); replan(); checkApps() }; return flip(&periods[i].disabled, periodLabel(periods[i]))
+        }, edit: { [unowned self] in editPeriod(periods[$0]) }, remove: removePeriod, add: (T("menu.addPeriod"), #selector(addPeriod), "b"), head: [workHoursItem])
+    }
+    // The Repeat/Date/Week/Weekday rows shared by overtime, periods and reminders. Keep `sync` alive while the form is open; `rule` reads the choice.
     // `endDay` is the end date field for a one-off that runs over several days; `until` reads it (nil unless after Date).
-    func repeatRows(defaultIndex: Int) -> (rows: [(String, NSView)], sync: ClosureTarget, rule: () -> String?, day: NSDatePicker, endDay: NSDatePicker, until: () -> String?) {
+    // `editing` fills the rows in from an existing rule and end day.
+    func repeatRows(defaultIndex: Int, editing: (rule: String?, until: String?)? = nil) -> (rows: [(String, NSView)], sync: ClosureTarget, rule: () -> String?, day: NSDatePicker, endDay: NSDatePicker, until: () -> String?) {
         let repeatPop = NSPopUpButton(), ordPop = NSPopUpButton(), weekPop = NSPopUpButton(), day = datePicker(), endDay = datePicker()
+        let byPop = NSPopUpButton(), dayPop = NSPopUpButton()
         repeatPop.addItems(withTitles: ["repeat.daily", "repeat.once", "repeat.weekly", "repeat.monthly"].map { T($0) }); repeatPop.selectItem(at: defaultIndex)
-        ordPop.addItems(withTitles: weekOrdinals.map { T($0) }); ordPop.selectItem(at: 3)
+        ordPop.addItems(withTitles: (weekOrdinals + ["week.last"]).map { T($0) }); ordPop.selectItem(at: 3)
+        // Monthly goes by weekday (the Nth Friday) or by date (the 15th, the last day), since a month can have four or five weeks.
+        byPop.addItems(withTitles: [T("repeat.byWeekday"), T("repeat.byDate")])
+        let monthDays = Array(1...31) + (1...7).map { -$0 }
+        dayPop.addItems(withTitles: monthDays.map(monthDayName)); dayPop.selectItem(at: 0)
         let names = weekdayNames
         weekPop.addItems(withTitles: Array(names[1...]) + [names[0]]); weekPop.selectItem(at: 4)
-        // Only the field the chosen repeat needs is editable.
-        let sync = ClosureTarget {
+        // Only the fields the chosen repeat needs are shown.
+        let sync = ClosureTarget { [unowned self] in
             let i = repeatPop.indexOfSelectedItem
-            day.isEnabled = i == 1; endDay.isEnabled = i == 1; weekPop.isEnabled = i >= 2; ordPop.isEnabled = i == 3
+            let byDate = i == 3 && byPop.indexOfSelectedItem == 1
+            day.isHidden = i != 1; endDay.isHidden = i != 1; byPop.isHidden = i != 3
+            weekPop.isHidden = i < 2 || byDate; ordPop.isHidden = i != 3 || byDate; dayPop.isHidden = !byDate
+            self.refitForm(repeatPop)
             // The end day never comes before the start day.
             if endDay.dateValue < day.dateValue && !Calendar.current.isDate(endDay.dateValue, inSameDayAs: day.dateValue) { endDay.dateValue = day.dateValue }
         }
-        for c in [repeatPop, day, endDay] as [NSControl] { c.target = sync; c.action = #selector(ClosureTarget.fire) }
+        if let (rule, until) = editing {
+            let parts = (rule ?? "").split(separator: ":").map(String.init), arg = parts.dropFirst().compactMap { Int($0) }
+            func week(_ w: Int?) { if let w = w { weekPop.selectItem(at: (w + 5) % 7) } }
+            switch parts.first {
+            case "once":
+                repeatPop.selectItem(at: 1)
+                if parts.count > 1, let d = dayKey.date(from: parts[1]) { day.dateValue = d; endDay.dateValue = until.flatMap { dayKey.date(from: $0) } ?? d }
+            case "weekly": repeatPop.selectItem(at: 2); week(arg.first)
+            case "monthly" where arg.count == 2: repeatPop.selectItem(at: 3); ordPop.selectItem(at: arg[0] < 0 ? 5 : arg[0] - 1); week(arg[1])
+            case "lastweekday": repeatPop.selectItem(at: 3); ordPop.selectItem(at: 5); week(arg.first)
+            case "monthday": repeatPop.selectItem(at: 3); byPop.selectItem(at: 1); dayPop.selectItem(at: arg.first.flatMap { monthDays.firstIndex(of: $0) } ?? 0)
+            default: repeatPop.selectItem(at: 0)
+            }
+        }
+        for c in [repeatPop, byPop, day, endDay] as [NSControl] { c.target = sync; c.action = #selector(ClosureTarget.fire) }
         sync.fire()
-        return ([(T("form.repeat"), repeatPop), (T("form.date"), day), (T("form.week"), ordPop), (T("form.weekday"), weekPop)], sync, {
-            let w = (weekPop.indexOfSelectedItem + 1) % 7 + 1, n = ordPop.indexOfSelectedItem + 1
-            return [nil, "once:" + dayKey.string(from: day.dateValue), "weekly:\(w)", "monthly:\(n):\(w)"][repeatPop.indexOfSelectedItem]
+        return ([(T("form.repeat"), repeatPop), (T("form.monthlyBy"), byPop), (T("form.date"), day), (T("form.week"), ordPop), (T("form.weekday"), weekPop),
+                 (T("form.monthDay"), dayPop)], sync, {
+            let w = (weekPop.indexOfSelectedItem + 1) % 7 + 1, n = ordPop.indexOfSelectedItem == 5 ? -1 : ordPop.indexOfSelectedItem + 1
+            let monthly = byPop.indexOfSelectedItem == 1 ? "monthday:\(monthDays[dayPop.indexOfSelectedItem])" : "monthly:\(n):\(w)"
+            return [nil, "once:" + dayKey.string(from: day.dateValue), "weekly:\(w)", monthly][repeatPop.indexOfSelectedItem]
         }, day, endDay, {
             let s = dayKey.string(from: day.dateValue), e = dayKey.string(from: endDay.dateValue)
             return repeatPop.indexOfSelectedItem == 1 && e > s ? e : nil
         })
     }
-    @objc func addBreak() {
-        let rep = repeatRows(defaultIndex: 0), t1 = timePicker("15:00"), t2 = timePicker("16:00"), note = noteField()
+    @objc func addPeriod() { editPeriod(nil) }
+    // Tasks following an edited period, or quiet in it, keep doing so at its new times; they are set under Tasks, and
+    // the form says how many there are.
+    func editPeriod(_ old: Period?) {
+        let rep = repeatRows(defaultIndex: 0, editing: old.map { ($0.rule, nil) })
+        let t1 = timePicker(old?.from ?? "15:00"), t2 = timePicker(old?.to ?? "16:00"), note = noteField()
         defer { withExtendedLifetime(rep.sync) {} }
-        note.placeholderString = T("break.notePlaceholder")
-        guard form(T("menu.addBreak"), T("break.help") + " " + T("help.overnight"),
+        note.placeholderString = T("period.notePlaceholder"); note.stringValue = old?.note ?? ""
+        let linked = old.map { o in jobs.filter { $0.follow?.contains(o.id) == true || $0.skip?.contains(o.id) == true }.count } ?? 0
+        guard form(T(old == nil ? "menu.addPeriod" : "edit.period"), sentences(T("period.help"), T("help.overnight"), linked > 0 ? T("period.otherTasks", String(linked)) : ""),
                    rep.rows + [(T("form.from"), t1), (T("form.to"), t2), (T("form.note"), note)],
+                   button: old == nil ? nil : T("common.save"),
                    check: { hmFmt.string(from: t2.dateValue) != hmFmt.string(from: t1.dateValue) ? nil : T("error.sameStartEnd") }) else { return }
-        let b = Break(from: hmFmt.string(from: t1.dateValue), to: hmFmt.string(from: t2.dateValue), note: note.stringValue.trimmingCharacters(in: .whitespaces), rule: rep.rule())
-        breaks.append(b); saveJSON(breaks, to: breaksURL); rebuildBreakMenu()
-        appendLog(T("log.breakAdded", breakLabel(b)))
-        next = nextSlot(after: Date()); tick()
+        var p = Period(from: hmFmt.string(from: t1.dateValue), to: hmFmt.string(from: t2.dateValue), note: note.stringValue.trimmingCharacters(in: .whitespaces),
+                       rule: rep.rule())
+        if let o = old { p.id = o.id; p.disabled = o.disabled }
+        put(p, over: old, in: &periods, label: periodLabel, added: "log.periodAdded")
+        saveJSON(periods, to: periodsURL); rebuildTasksMenu()
+        replan(); checkApps()
     }
-    @objc func removeBreak(_ sender: NSMenuItem) {
-        guard breaks.indices.contains(sender.tag), confirmRemove(T("confirm.deleteBreak"), breakLabel(breaks[sender.tag])) else { return }
-        let b = breaks.remove(at: sender.tag); saveJSON(breaks, to: breaksURL); rebuildBreakMenu()
-        appendLog(T("log.breakDeleted", breakLabel(b)))
+    // Tasks that follow nothing else are deleted with it, or kept following nothing, as the person picks.
+    func removePeriod(_ i: Int) {
+        guard periods.indices.contains(i) else { return }
+        let p = periods[i], bound = jobs.filter { $0.follow == [p.id] }.map(jobLabel)
+        var keepTasks = false
+        if bound.isEmpty {
+            guard confirmRemove(T("confirm.deletePeriod"), periodLabel(p)) else { return }
+        } else {
+            NSApp.activate(ignoringOtherApps: true)
+            let a = NSAlert(); a.messageText = T("confirm.deletePeriod")
+            a.informativeText = periodLabel(p) + "\n\n" + T("period.boundTasks") + "\n" + bound.joined(separator: "\n") + "\n\n" + T("period.keepHelp")
+            a.addButton(withTitle: T("period.deleteWithTasks")); a.addButton(withTitle: T("period.keepTasks"))
+            a.addButton(withTitle: T("common.cancel")).keyEquivalent = "\u{1b}"
+            switch a.runModal() {
+            case .alertFirstButtonReturn: break
+            case .alertSecondButtonReturn: keepTasks = true
+            default: return
+            }
+        }
+        periods.remove(at: i); saveJSON(periods, to: periodsURL); rebuildPeriodMenu()
+        appendLog(T("log.periodDeleted", periodLabel(p))); dropFollowers(of: p, keepTasks: keepTasks)
         next = nextSlot(after: Date()); tick()
     }
 
-    @objc func setInterval() {
-        NSApp.activate(ignoringOtherApps: true)
-        let field = NSTextField(string: String(intervalMinutes)); field.frame.size.width = 120
-        let a = NSAlert(); a.messageText = T("interval.title"); a.informativeText = T("interval.help")
-        a.accessoryView = field; a.addButton(withTitle: T("common.save")); a.addButton(withTitle: T("common.cancel"))
-        a.window.initialFirstResponder = field
-        while a.runModal() == .alertFirstButtonReturn {
-            guard let v = Int(field.stringValue.trimmingCharacters(in: .whitespaces)), (1...240).contains(v) else {
-                a.informativeText = T("interval.invalid", field.stringValue); continue
+    // A floating pop-up that does not block the menu bar timer; several can be open at once.
+    func showReminder(_ lines: [String], title: String? = nil) {
+        let a = NSAlert(); a.messageText = title ?? T("reminder.title", hmFmt.string(from: Date())); a.informativeText = lines.joined(separator: "\n")
+        a.icon = NSImage(systemSymbolName: "bell.fill", accessibilityDescription: nil)
+        let ok = a.addButton(withTitle: T("common.ok"))
+        let close = ClosureTarget { [weak self, weak a] in
+            a?.window.orderOut(nil); self?.reminderAlerts.removeAll { $0.0 === a }
+        }
+        ok.target = close; ok.action = #selector(ClosureTarget.fire)
+        reminderAlerts.append((a, close))
+        a.layout(); a.window.level = .floating; a.window.center()
+        a.window.collectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary]
+        NSSound(named: "Glass")?.play()
+        NSApp.activate(ignoringOtherApps: true); a.window.makeKeyAndOrderFront(nil)
+    }
+
+    func followName(_ f: String) -> String {
+        switch f {
+        case "work": return T("apps.followWork")
+        case "lunch": return T("form.lunch") + " " + (lunchInWork() == nil ? T("lunch.none") : spanText(lunchStart, lunchEnd))
+        case "overtime": return T("section.overtime")
+        case let id: return periods.first { $0.id == id }.map { $0.note.isEmpty ? spanText($0.from, $0.to) : $0.note + " " + spanText($0.from, $0.to) } ?? T("apps.periodGone")
+        }
+    }
+    // When a task runs, then what it does.
+    func jobLabel(_ j: Job) -> String {
+        let names = follows(j).isEmpty ? T("job.noPeriod") : follows(j).map(followName).joined(separator: T("common.listSeparator")), o = j.offset ?? 0
+        switch j.action {
+        case "nudge":
+            let when = ["work", "overtime"].map(followName)
+            return T("job.every", when.joined(separator: T("common.listSeparator")), String(j.every ?? 10)) + skipText(j) + "  " + T("job.nudge")
+        case "app":
+            let lead = j.lead ?? 0, lag = j.lag ?? 0
+            let timing = j.keepOpen == true ? (lead > 0 ? T("apps.earlyNoQuit", String(lead)) : T("apps.noQuit"))
+                : lead + lag > 0 ? T("apps.timing", String(lead), String(lag)) : ""
+            return T("job.during", names) + (timing.isEmpty ? "" : T("common.paren", timing)) + "  " + T("job.openLink", j.name ?? "")
+        default: break
+        }
+        let edge = ["end": "End", "both": "Both"][j.when] ?? "Start"
+        let when = j.when == "at" ? "\(ruleLabel(j.rule)) \(j.at ?? "")" + (j.anyDay == true ? T("common.paren", T("job.anyDayTag")) : "")
+            : j.when == "every" ? T("job.every", names, String(j.every ?? 0)) + skipText(j)
+            : o > 0 ? T("job.before" + edge, names, String(o)) : T("job.at" + edge, names)
+        let what: String
+        switch j.action {
+        case "notify": what = j.text.isEmpty ? T("job.notify") : T("job.notifyText", j.text)
+        case "shortcut": what = T("job.runShortcut", j.text)
+        case "url": what = T("job.openLink", j.text)
+        default: what = T("job.runCommand", j.text)
+        }
+        return when + "  " + what
+    }
+    // "(quiet in lunch, review)" for a task every few minutes with periods to be quiet in.
+    func skipText(_ j: Job) -> String {
+        guard let s = j.skip, !s.isEmpty else { return "" }
+        return T("common.paren", T("job.quietIn", s.map(followTitle).joined(separator: T("common.listSeparator"))))
+    }
+    func rebuildTasksMenu() {
+        fill(tasksRoot, jobs.map { (jobLabel($0) + (jobHeld($0) ? T("common.paren", T("job.heldTag")) : jobUnbound($0) ? T("common.paren", T("job.unboundTag")) : ""), $0.disabled == true) }, toggle: { [unowned self] i in
+            defer { saveJSON(jobs, to: jobsURL); jobsChanged() }; return flip(&jobs[i].disabled, jobLabel(jobs[i]))
+        }, edit: { [unowned self] in editJob(jobs[$0]) }, remove: removeJob, add: (T("menu.addTask"), #selector(addJob), ""),
+           test: { [unowned self] in testJob(jobs[$0]) })
+        rebuildPeriodMenu()
+    }
+    // Runs a task once now, whatever its time, turned off or paused, so its setup can be checked: the pop-up shows the text
+    // it would show (at its start, for one told at both edges), the nudge moves the cursor, an app is opened.
+    func testJob(_ j: Job) {
+        appendLog(T("log.taskTested", jobLabel(j)))
+        switch j.action {
+        case "nudge": run(manual: true); let now = Date(); next = slot(after: now, now: now); tick()
+        case "app":
+            guard let path = j.path else { return }
+            NSWorkspace.shared.openApplication(at: URL(fileURLWithPath: path), configuration: NSWorkspace.OpenConfiguration()) { _, error in
+                DispatchQueue.main.async { appendLog(error.map { T("log.appOpenFailed", j.name ?? "", $0.localizedDescription) } ?? T("log.appOpened", j.name ?? "")) }
             }
-            intervalMinutes = v; UserDefaults.standard.set(v, forKey: "intervalMinutes")
-            intervalItem.title = T("menu.interval", String(v))
-            appendLog(T("log.intervalChanged", String(v)))
-            next = nextSlot(after: Date()); tick(); return
+        case "notify":
+            let f = follows(j).first ?? "work"
+            showReminder([["at", "every"].contains(j.when) ? (j.text.isEmpty ? T("reminder.untitled", hmFmt.string(from: Date())) : j.text) : edgeText(j, f, end: j.when == "end")])
+        default: perform(j)
+        }
+    }
+    // After any change to the tasks: the nudge interval and its permission, the next nudge, the apps.
+    func jobsChanged() {
+        applyNudge(); rebuildPeriodMenu()
+        if nudging && !AXIsProcessTrusted() { askAccessibility() }
+        replan(); checkApps()
+    }
+    @objc func addJob() { editJob(nil) }
+    // One form for every task: first what it does, then when; only the fields those choices need are shown.
+    func editJob(_ old: Job?) {
+        // There is one nudge; it keeps its action, and others can't become a second one.
+        let hasNudge = jobs.contains { $0.action == "nudge" && $0.id != old?.id }
+        let actions = old?.action == "nudge" ? ["nudge"] : ["notify", "app", "shortcut", "url", "script"] + (hasNudge ? [] : ["nudge"])
+        let whens = ["at", "start", "end", "both", "every"]
+        let actionPop = NSPopUpButton(), whenPop = NSPopUpButton()
+        actionPop.addItems(withTitles: actions.map { T("job." + $0) }); actionPop.selectItem(at: actions.firstIndex(of: old?.action ?? "notify") ?? 0)
+        whenPop.addItems(withTitles: whens.map { T("when." + $0) }); whenPop.selectItem(at: whens.firstIndex(of: old?.when ?? "at") ?? 0)
+        let message = noteField(), shortcut = noteField(), link = noteField(), command = noteField()
+        message.placeholderString = T("job.messagePlaceholder"); shortcut.placeholderString = T("job.shortcutPlaceholder")
+        link.placeholderString = "https://"; command.placeholderString = T("job.commandPlaceholder")
+        let textFields = ["notify": message, "shortcut": shortcut, "url": link, "script": command]
+        if let o = old { textFields[o.action]?.stringValue = o.text }
+        // Apps are picked with the button; adding can pick several, one task each.
+        var picked: [URL] = old?.path.map { [URL(fileURLWithPath: $0)] } ?? []
+        let appButton = NSButton(title: "", target: nil, action: nil); appButton.bezelStyle = .rounded
+        let showPicked = { appButton.title = picked.isEmpty ? T("job.pickApp") : picked.map { $0.deletingPathExtension().lastPathComponent }.joined(separator: T("common.listSeparator")) }
+        let pickApp = ClosureTarget { [unowned self] in
+            let p = NSOpenPanel(); p.allowedContentTypes = [.application]; p.allowsMultipleSelection = old == nil
+            p.directoryURL = URL(fileURLWithPath: "/Applications"); p.prompt = T("common.ok")
+            if p.runModal() == .OK, !p.urls.isEmpty { picked = p.urls; showPicked(); self.refitForm(appButton) }
+        }
+        appButton.target = pickApp; appButton.action = #selector(ClosureTarget.fire); showPicked()
+        let quit = NSButton(checkboxWithTitle: T("apps.autoQuit"), target: nil, action: nil), locked = NSButton(checkboxWithTitle: T("menu.nudgeWhenLocked"), target: nil, action: nil)
+        quit.state = old?.keepOpen == true ? .off : .on; locked.state = nudgeWhenLocked ? .on : .off
+        let rep = repeatRows(defaultIndex: 0, editing: old.map { ($0.rule, nil) }), t = timePicker(old?.at ?? "10:00")
+        let anyDay = NSButton(checkboxWithTitle: T("job.anyDay"), target: nil, action: nil); anyDay.state = old?.anyDay == true ? .on : .off
+        // Any number of times can be followed, none ticked for a new task. A turned-off or deleted period stays on the list
+        // while the task follows it.
+        let pickedFollow = old.map(follows) ?? []
+        let shown = periods.filter { $0.disabled != true || pickedFollow.contains($0.id) }
+        let lunch = lunchInWork() != nil || pickedFollow.contains("lunch") ? ["lunch"] : []
+        // Work hours and overtime show their times too, as lunch and the periods do; several overtimes are listed once each.
+        // Overtime with no times set is left off, unless the task already follows it.
+        let otTimes = overtimes.filter { $0.disabled != true }.map(otSpanText).reduce(into: [String]()) { if !$0.contains($1) { $0.append($1) } }
+        let overtime = !otTimes.isEmpty || pickedFollow.contains("overtime") ? ["overtime"] : []
+        var choices: [String] = ["work"] + lunch + overtime + shown.map(\.id)
+        let workTitle = followName("work") + " " + spanText(workStart, workEnd)
+        let otTitles = overtime.map { _ in followName("overtime") + (otTimes.isEmpty ? "" : " " + otTimes.joined(separator: T("common.listSeparator"))) }
+        var titles = [workTitle] + lunch.map(followName) + otTitles + shown.map(periodLabel)
+        for f in pickedFollow where !choices.contains(f) { choices.append(f); titles.append(T("apps.periodGone")) }
+        let boxes = titles.map { NSButton(checkboxWithTitle: $0, target: nil, action: nil) }
+        zip(choices, boxes).forEach { $1.state = pickedFollow.contains($0) ? .on : .off }
+        let follow = NSStackView(views: boxes); follow.orientation = .vertical; follow.alignment = .leading; follow.spacing = 4
+        // The periods to be quiet in, for a task every few minutes; kept the same way as those followed.
+        let pickedSkip = old?.skip ?? []
+        var skipChoices = periods.filter { $0.disabled != true || pickedSkip.contains($0.id) }.map(\.id)
+        var skipTitles = skipChoices.map { id in periods.first { $0.id == id }.map(periodLabel) ?? "" }
+        for s in pickedSkip where !skipChoices.contains(s) { skipChoices.append(s); skipTitles.append(T("apps.periodGone")) }
+        let skipBoxes = skipTitles.map { NSButton(checkboxWithTitle: $0, target: nil, action: nil) }
+        zip(skipChoices, skipBoxes).forEach { $1.state = pickedSkip.contains($0) ? .on : .off }
+        let skip = NSStackView(views: skipBoxes); skip.orientation = .vertical; skip.alignment = .leading; skip.spacing = 4
+        let early = noteField(), every = noteField(), lead = noteField(), lag = noteField()
+        early.stringValue = String(old?.offset ?? 0); every.stringValue = String(old?.every ?? 10)
+        lead.stringValue = String(old?.lead ?? 0); lag.stringValue = String(old?.lag ?? 0)
+        let sync = ClosureTarget { [unowned self] in
+            let a = actions[actionPop.indexOfSelectedItem], w = whens[whenPop.indexOfSelectedItem], timed = !["nudge", "app"].contains(a)
+            for (k, f) in textFields { f.isHidden = k != a }
+            for v in [appButton, quit, lead] as [NSView] { v.isHidden = a != "app" }
+            // Minutes late only matter when the app is quit.
+            lag.isHidden = a != "app" || quit.state == .off
+            locked.isHidden = a != "nudge"; whenPop.isHidden = !timed
+            every.isHidden = !(a == "nudge" || timed && w == "every")
+            skip.isHidden = every.isHidden || skipBoxes.isEmpty
+            follow.isHidden = !(a == "app" || timed && w != "at")
+            early.isHidden = !(timed && ["start", "end", "both"].contains(w))
+            let at = timed && w == "at"
+            t.isHidden = !at; rep.rows.forEach { $0.1.isHidden = !at }
+            // A one-off runs on its date whatever day it is.
+            anyDay.isHidden = !at || onceDay(rep.rule()) != nil
+            if at { rep.sync.fire() } else { self.refitForm(actionPop) }
+        }
+        // The repeat choice also decides whether days off can be picked.
+        for c in [actionPop, whenPop, quit, rep.rows[0].1 as! NSControl] { c.target = sync; c.action = #selector(ClosureTarget.fire) }
+        sync.fire()
+        defer { withExtendedLifetime((rep.sync, sync, pickApp)) {} }
+        func trimmed(_ f: NSTextField) -> String { f.stringValue.trimmingCharacters(in: .whitespaces) }
+        func minutes(_ f: NSTextField, _ r: ClosedRange<Int> = 0...240) -> Int? { Int(trimmed(f)).flatMap { r.contains($0) ? $0 : nil } }
+        // Only the fields shown are checked and saved.
+        guard form(T(old == nil ? "menu.addTask" : "edit.task"), T("task.help"),
+                   [(T("form.action"), actionPop), (T("form.message"), message), (T("form.shortcut"), shortcut), (T("form.link"), link),
+                    (T("form.command"), command), (T("form.app"), appButton), (T("form.when"), whenPop)] + rep.rows
+                   + [(T("form.at"), t), ("", anyDay), (T("form.follow"), follow), (T("form.early"), early), (T("form.every"), every), (T("form.skip"), skip), (T("form.openEarly"), lead),
+                      (T("form.quit"), quit), (T("form.closeLate"), lag), ("", locked)],
+                   button: old == nil ? nil : T("common.save"),
+                   check: {
+                       let a = actions[actionPop.indexOfSelectedItem]
+                       if a == "shortcut" || a == "script", trimmed(textFields[a]!).isEmpty { return T("job.needText") }
+                       if a == "url", URL(string: trimmed(link))?.scheme == nil { return T("job.badLink") }
+                       if a == "app" && picked.isEmpty { return T("job.needApp") }
+                       if !follow.isHidden && !boxes.contains(where: { $0.state == .on }) { return T("error.pickOne") }
+                       if !every.isHidden && minutes(every, 1...240) == nil { return T("interval.invalid", every.stringValue) }
+                       return [early, lead, lag].contains { !$0.isHidden && minutes($0) == nil } ? T("appTimes.invalid") : nil
+                   }) else { return }
+        let a = actions[actionPop.indexOfSelectedItem], timed = !["nudge", "app"].contains(a)
+        var j = Job(action: a, text: textFields[a].map(trimmed) ?? "", when: timed ? whens[whenPop.indexOfSelectedItem] : a == "app" ? "during" : "every")
+        if let o = old { j.id = o.id; j.disabled = o.disabled }
+        if !t.isHidden { j.at = hmFmt.string(from: t.dateValue); j.rule = rep.rule() }
+        if !anyDay.isHidden && anyDay.state == .on { j.anyDay = true }
+        if !follow.isHidden { j.follow = zip(choices, boxes).filter { $1.state == .on }.map(\.0) }
+        if !early.isHidden { j.offset = minutes(early).flatMap { $0 > 0 ? $0 : nil } }
+        if !every.isHidden { j.every = minutes(every, 1...240) }
+        if !skip.isHidden { j.skip = zip(skipChoices, skipBoxes).filter { $1.state == .on }.map(\.0); if j.skip!.isEmpty { j.skip = nil } }
+        if a == "app" { j.lead = minutes(lead); j.keepOpen = quit.state == .off ? true : nil; j.lag = j.keepOpen == true ? nil : minutes(lag) }
+        if a == "nudge" && (locked.state == .on) != nudgeWhenLocked {
+            UserDefaults.standard.set(locked.state == .on, forKey: "nudgeWhenLocked"); appendLog(T(nudgeWhenLocked ? "log.nudgeWhenLockedOn" : "log.nudgeWhenLockedOff"))
+        }
+        if a == "app" {
+            // An app has one task; picking it again replaces the one it had.
+            for (n, url) in picked.enumerated() {
+                var x = j; if n > 0 { x.id = UUID().uuidString }
+                x.name = url.deletingPathExtension().lastPathComponent; x.path = url.path; x.bundleID = Bundle(url: url)?.bundleIdentifier
+                jobs.removeAll { $0.action == "app" && $0.path == x.path && $0.id != old?.id }
+                put(x, over: n == 0 ? old : nil, in: &jobs, label: jobLabel, added: "log.taskAdded")
+            }
+        } else {
+            put(j, over: old, in: &jobs, label: jobLabel, added: "log.taskAdded")
+        }
+        saveJSON(jobs, to: jobsURL); rebuildTasksMenu(); jobsChanged()
+    }
+    func removeJob(_ i: Int) {
+        guard jobs.indices.contains(i), confirmRemove(T("confirm.deleteTask"), jobLabel(jobs[i])) else { return }
+        let j = jobs.remove(at: i); saveJSON(jobs, to: jobsURL); rebuildTasksMenu()
+        appendLog(T("log.taskDeleted", jobLabel(j))); jobsChanged()
+    }
+    // Tasks stop following a deleted period; one left following nothing is deleted.
+    func dropFollowers(of p: Period, keepTasks: Bool = false) {
+        guard jobs.contains(where: { $0.follow?.contains(p.id) == true || $0.skip?.contains(p.id) == true }) else { return }
+        if !keepTasks {
+            jobs.filter { $0.follow == [p.id] }.forEach { appendLog(T("log.taskDeleted", jobLabel($0))) }
+            jobs = jobs.filter { $0.follow != [p.id] }
+        }
+        jobs = jobs.map { var j = $0; j.follow = j.follow?.filter { $0 != p.id }
+            j.skip = j.skip?.filter { $0 != p.id }; if j.skip?.isEmpty == true { j.skip = nil }; return j }
+        saveJSON(jobs, to: jobsURL); rebuildTasksMenu()
+    }
+    // Runs a task's shortcut, link or shell command (a login shell, as this user), and logs how it went.
+    func perform(_ j: Job) {
+        let label = jobLabel(j)
+        if j.action == "url" {
+            let ok = URL(string: j.text).map { NSWorkspace.shared.open($0) } ?? false
+            appendLog(ok ? T("log.taskRan", label) : T("log.taskFailed", label, T("job.badLink"))); return
+        }
+        let p = Process()
+        p.executableURL = URL(fileURLWithPath: j.action == "shortcut" ? "/usr/bin/shortcuts" : "/bin/zsh")
+        p.arguments = j.action == "shortcut" ? ["run", j.text] : ["-lc", j.text]
+        p.standardInput = FileHandle.nullDevice; p.standardOutput = FileHandle.nullDevice; p.standardError = FileHandle.nullDevice
+        p.terminationHandler = { p in
+            let status = p.terminationStatus
+            DispatchQueue.main.async { appendLog(status == 0 ? T("log.taskRan", label) : T("log.taskFailed", label, "exit \(status)")) }
+        }
+        do { try p.run() } catch { appendLog(T("log.taskFailed", label, error.localizedDescription)) }
+    }
+    // Opens any app task's app that isn't running while it is wanted (a failed launch is retried after a minute), and
+    // quits it once when its time ends, unless it keeps it open; an app opened by hand outside its time is left alone.
+    func checkApps() {
+        let now = Date(); lastAppCheck = now
+        let running = NSWorkspace.shared.runningApplications
+        for a in jobs where a.action == "app" {
+            let path = a.path ?? "", name = a.name ?? ""
+            let wanted = appWanted(a, now)
+            let ending = !wanted && a.disabled != true && a.keepOpen != true && appWasWanted[path] == true
+            appWasWanted[path] = wanted
+            guard wanted || ending else { continue }
+            let mine = running.filter { $0.bundleURL?.path == path || (a.bundleID != nil && $0.bundleIdentifier == a.bundleID) }
+            if ending {
+                if !mine.isEmpty { mine.forEach { $0.terminate() }; appendLog(T("log.appClosed", name)) }
+                continue
+            }
+            guard mine.isEmpty, now.timeIntervalSince(appLaunchTried[path] ?? .distantPast) >= 60 else { continue }
+            appLaunchTried[path] = now
+            let c = NSWorkspace.OpenConfiguration(); c.activates = false; c.addsToRecentItems = false
+            NSWorkspace.shared.openApplication(at: URL(fileURLWithPath: path), configuration: c) { _, error in
+                DispatchQueue.main.async { appendLog(error.map { T("log.appOpenFailed", name, $0.localizedDescription) } ?? T("log.appOpened", name)) }
+            }
         }
     }
 
+    func workHoursTitle() -> String {
+        T("menu.workHours", workStart, endText(workStart, workEnd)) + (lunchInWork() == nil ? "" : T("common.paren", T("form.lunch") + " " + spanText(lunchStart, lunchEnd)))
+    }
     @objc func setWorkHours() {
         let t1 = timePicker(workStart), t2 = timePicker(workEnd)
-        guard form(T("workHours.title"), T("workHours.help") + " " + T("workHours.nightShiftHelp"), [(T("form.from"), t1), (T("form.to"), t2)], button: T("common.save"),
-                   check: { hmFmt.string(from: t2.dateValue) != hmFmt.string(from: t1.dateValue) ? nil : T("error.sameStartEnd") }) else { return }
-        let (s, e) = (hmFmt.string(from: t1.dateValue), hmFmt.string(from: t2.dateValue))
+        // Lunch is a tick and its own from–to on one row; unticked means none.
+        let hasLunch = NSButton(checkboxWithTitle: "", target: nil, action: nil); hasLunch.state = lunchStart.isEmpty ? .off : .on
+        let l1 = timePicker(lunchStart.isEmpty ? "12:00" : lunchStart), l2 = timePicker(lunchEnd.isEmpty ? "13:00" : lunchEnd)
+        let lunchRow = NSStackView(views: [hasLunch, l1, NSTextField(labelWithString: "–"), l2]); lunchRow.spacing = 6
+        let hm = { (p: NSDatePicker) in hmFmt.string(from: p.dateValue) }
+        guard form(T("workHours.title"), sentences(T("workHours.help"), T("workHours.lunchHelp"), T("workHours.nightShiftHelp")),
+                   [(T("form.from"), t1), (T("form.to"), t2), (T("form.lunch"), lunchRow)], button: T("common.save"),
+                   check: {
+                       if hm(t2) == hm(t1) { return T("error.sameStartEnd") }
+                       if hasLunch.state == .on && lunchInWork(hm(l1), hm(l2), start: hm(t1), end: hm(t2)) == nil { return T("error.lunchOutside") }
+                       return nil
+                   }) else { return }
+        let (s, e) = (hm(t1), hm(t2))
         UserDefaults.standard.set(s, forKey: "workStart"); UserDefaults.standard.set(e, forKey: "workEnd")
-        workHoursItem.title = T("menu.workHours", s, endText(s, e))
-        appendLog(T("log.workHoursChanged", s, endText(s, e)))
+        UserDefaults.standard.set(hasLunch.state == .on ? hm(l1) : "", forKey: "lunchStart"); UserDefaults.standard.set(hm(l2), forKey: "lunchEnd")
+        workHoursItem.title = workHoursTitle()
+        appendLog(T("log.workHoursChanged", s, endText(s, e)) + (lunchInWork() == nil ? "" : T("common.paren", T("form.lunch") + " " + spanText(lunchStart, lunchEnd)))); rebuildPeriodMenu(); rebuildTasksMenu()
         next = nextSlot(after: Date()); tick()
     }
-    @objc func toggleLocked(_ sender: NSMenuItem) {
-        UserDefaults.standard.set(!nudgeWhenLocked, forKey: "nudgeWhenLocked"); sender.state = nudgeWhenLocked ? .on : .off
-        appendLog(T(nudgeWhenLocked ? "log.nudgeWhenLockedOn" : "log.nudgeWhenLockedOff"))
-    }
-
     @objc func togglePause() { paused.toggle(); UserDefaults.standard.set(paused, forKey: "paused"); tick() }
-    @objc func nudgeNow() { run(manual: true); let now = Date(); next = slot(after: now, now: now); tick() }
     // Paste a holiday link; it is fetched right away and only kept if it yields holidays.
     // This year's holidays, filled in each time the submenu opens; past days are greyed out.
     func menuNeedsUpdate(_ menu: NSMenu) {
@@ -956,7 +1794,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         let field = NSTextField(string: initial); field.frame.size.width = 380; field.placeholderString = "https://example.com/holidays.ics"
         let a = NSAlert(); a.messageText = T("menu.subscribeHoliday")
         a.informativeText = T("holiday.subscribeHelp")
-        a.accessoryView = field; a.addButton(withTitle: T("holiday.saveAndFetch")); a.addButton(withTitle: T("common.cancel"))
+        a.accessoryView = field; a.addButton(withTitle: T("holiday.saveAndFetch")); a.addButton(withTitle: T("common.cancel")).keyEquivalent = "\u{1b}"
         a.window.initialFirstResponder = field
         guard a.runModal() == .alertFirstButtonReturn, !fetching else { return }
         let source = field.stringValue.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -983,7 +1821,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         let a = NSAlert(); a.alertStyle = .warning; a.messageText = f.title
         a.informativeText = f.advice + (link != nil && !holidaySource.isEmpty && link != holidaySource ? " " + T("holiday.keptPrevious") : "")
         guard let link else { a.runModal(); return }
-        a.addButton(withTitle: T("holiday.editLink")); a.addButton(withTitle: T("common.cancel"))
+        a.addButton(withTitle: T("holiday.editLink")); a.addButton(withTitle: T("common.cancel")).keyEquivalent = "\u{1b}"
         if a.runModal() == .alertFirstButtonReturn { askHolidaySource(link) }
     }
     @objc func refetchHolidays() { checkHolidays(force: true, report: true) }
@@ -996,12 +1834,23 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         holidays = HolidayCache(fetched: "", years: [], days: [:]); try? FileManager.default.removeItem(at: holidayURL)
         appendLog(T("log.holidayUnsubscribed")); next = nextSlot(after: Date()); tick()
     }
-    // Registers the app itself as a login item, for copies installed from the disk image.
+    // Turning it off stops the agent's copy, so when that is this one a fresh copy is opened first to take over.
     @objc func toggleLogin(_ sender: NSMenuItem) {
         do {
-            if SMAppService.mainApp.status == .enabled { try SMAppService.mainApp.unregister() } else { try SMAppService.mainApp.register() }
+            if loginAgentOn {
+                if underLoginAgent {
+                    let c = NSWorkspace.OpenConfiguration(); c.createsNewApplicationInstance = true; c.arguments = [takeoverArgument]
+                    NSWorkspace.shared.openApplication(at: Bundle.main.bundleURL, configuration: c) { _, _ in
+                        DispatchQueue.main.async { try? disableLoginAgent() }
+                    }
+                    return
+                }
+                try disableLoginAgent()
+            } else {
+                try enableLoginAgent()
+            }
         } catch { appendLog(T("log.openAtLoginFailed", error.localizedDescription)) }
-        sender.state = SMAppService.mainApp.status == .enabled ? .on : .off
+        sender.state = loginAgentOn ? .on : .off
     }
     @objc func openLog() { NSWorkspace.shared.open(logURL) }
     @objc func clearLog() {
@@ -1014,6 +1863,58 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     }
     @objc func openPrivacy() { NSWorkspace.shared.open(URL(string: "x-apple.systempreferences:com.apple.preference.security?Privacy_Accessibility")!) }
 }
+
+// Open at login is a user launch agent that runs this copy's executable by path, so it starts at login and again after a
+// crash, but not after Quit (a clean exit). A plain agent file keeps working when the app is rebuilt or updated in place,
+// unlike one registered through SMAppService, which is tied to the signature it was registered with.
+let loginAgentLabel = "io.github.mar-er.shiftbell.keepalive"
+let loginAgentURL = URL(fileURLWithPath: NSHomeDirectory() + "/Library/LaunchAgents/\(loginAgentLabel).plist")
+let underLoginAgent = ProcessInfo.processInfo.environment["XPC_SERVICE_NAME"] == loginAgentLabel
+let takeoverArgument = "--takeover"
+var loginAgentOn: Bool { FileManager.default.fileExists(atPath: loginAgentURL.path) }
+@discardableResult func launchctl(_ args: String...) -> Int32 {
+    let p = Process(); p.executableURL = URL(fileURLWithPath: "/bin/launchctl"); p.arguments = args
+    p.standardOutput = FileHandle.nullDevice; p.standardError = FileHandle.nullDevice
+    do { try p.run() } catch { return -1 }
+    p.waitUntilExit(); return p.terminationStatus
+}
+// Loading the agent starts its copy at once, which closes this one.
+func enableLoginAgent() throws {
+    let plist: [String: Any] = ["Label": loginAgentLabel, "ProgramArguments": [Bundle.main.executablePath!], "RunAtLoad": true,
+                                "KeepAlive": ["SuccessfulExit": false], "LimitLoadToSessionType": "Aqua", "ProcessType": "Interactive"]
+    try FileManager.default.createDirectory(at: loginAgentURL.deletingLastPathComponent(), withIntermediateDirectories: true)
+    try PropertyListSerialization.data(fromPropertyList: plist, format: .xml, options: 0).write(to: loginAgentURL)
+    launchctl("bootstrap", "gui/\(getuid())", loginAgentURL.path)
+}
+// Unloading stops the agent's copy, if that is the one running.
+func disableLoginAgent() throws {
+    try FileManager.default.removeItem(at: loginAgentURL)
+    launchctl("bootout", "gui/\(getuid())/\(loginAgentLabel)")
+}
+// Only one copy runs, and while open at login is on it is the launch agent's. Copies opened from Finder hand over to the
+// agent; the agent's copy closes any other. Earlier versions used a login item or an SMAppService agent; both move over.
+func claimSingleInstance() {
+    let others = NSRunningApplication.runningApplications(withBundleIdentifier: Bundle.main.bundleIdentifier ?? "")
+        .filter { $0.processIdentifier != getpid() }
+    if CommandLine.arguments.contains(takeoverArgument) { return }
+    if underLoginAgent { others.forEach { $0.terminate() }; return }
+    // MouseNudge, the old name: close it, and move its open-at-login agent over to this copy.
+    NSRunningApplication.runningApplications(withBundleIdentifier: oldBundleID).forEach { $0.terminate() }
+    let oldAgent = URL(fileURLWithPath: NSHomeDirectory() + "/Library/LaunchAgents/\(oldBundleID).keepalive.plist")
+    if FileManager.default.fileExists(atPath: oldAgent.path) {
+        try? FileManager.default.removeItem(at: oldAgent); launchctl("bootout", "gui/\(getuid())/\(oldBundleID).keepalive")
+        if !loginAgentOn { try? enableLoginAgent() }
+    }
+    let legacy = SMAppService.agent(plistName: "io.github.mar-er.mousenudge.agent.plist")
+    for old in [SMAppService.mainApp, legacy] where old.status == .enabled { try? old.unregister(); if !loginAgentOn { try? enableLoginAgent() } }
+    if loginAgentOn {
+        // Not loaded yet (turned on in an older session): load it, otherwise just make sure its copy is running.
+        if launchctl("kickstart", "gui/\(getuid())/\(loginAgentLabel)") != 0 { launchctl("bootstrap", "gui/\(getuid())", loginAgentURL.path) }
+        exit(0)
+    }
+    if !others.isEmpty { exit(0) }
+}
+claimSingleInstance()
 
 let app = NSApplication.shared
 let delegate = AppDelegate()

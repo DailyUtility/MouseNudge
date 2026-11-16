@@ -225,8 +225,8 @@ let templateHelp = "Fill in the translation (keep placeholders such as %@ and %1
 // translation column for reference; JSON starts from the English text.
 func saveTemplate(xlsx: Bool) throws -> URL {
     let fm = FileManager.default, downloads = fm.urls(for: .downloadsDirectory, in: .userDomainMask).first!, ext = xlsx ? "xlsx" : "json"
-    var url = downloads.appendingPathComponent("MouseNudge-language-template.\(ext)"), n = 2
-    while fm.fileExists(atPath: url.path) { url = downloads.appendingPathComponent("MouseNudge-language-template \(n).\(ext)"); n += 1 }
+    var url = downloads.appendingPathComponent("Shiftbell-language-template.\(ext)"), n = 2
+    while fm.fileExists(atPath: url.path) { url = downloads.appendingPathComponent("Shiftbell-language-template \(n).\(ext)"); n += 1 }
     func text(_ code: String, _ k: String) -> String { translations[code]?[k] ?? "" }
     if xlsx {
         let refs = builtinLanguages.map(\.code)
