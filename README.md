@@ -13,7 +13,7 @@ Everything is in the menu bar menu. Each leave, overtime, period and task row ha
 - **Work hours** are the fixed first row under Periods, on working days (Monday–Friday), default 09:00–18:00. Lunch, default 12:00–13:00, sits inside them and can be unticked. Lunch is not work time: the mouse nudge and tasks every few minutes stop during it. A night shift such as 22:00–06:00 belongs to the day it starts on.
 - **Periods** are named stretches of time, such as a meeting or focus time: daily, weekly, monthly or one-off. A period only gives the time a name and a countdown; tasks can run at its start or end, or pause in it. Periods apply on working days and days with overtime, a one-off period on its own date. They never add work time; overtime does that.
 - **Overtime** (one day, several days in a row, or repeating) and **leave** (whole days or part of a day). Repeating overtime also runs on weekends but skips holidays. Leave wins: during leave there is no nudging, overtime does not count, and tasks wait, except timed tasks set to run on days off and one-off ones.
-- **Holidays** come from any iCalendar subscription (`.ics` or `webcal://`, for example from Apple Calendar or officeholidays.com), under **More → Subscribe to Holiday Calendar**. Until you add one, only weekends are days off.
+- **Holidays** come from any iCalendar subscription (`.ics` or `webcal://`, for example from Apple Calendar or officeholidays.com), under **More → Subscribe to Holiday Calendar**. Until you add one, only weekends are days off. See [Holiday calendars](#holiday-calendars) for where to get one.
 - Monthly repeats go by weekday (1st to 5th or last) or by date (a day of the month, the last day, or N days from the end), for overtime, periods and tasks alike.
 
 ### Scheduled tasks
@@ -42,6 +42,23 @@ A deleted period is taken off every task that follows it. If a task followed onl
 - **Delete period, keep tasks** keeps them, marked "won't run until given a time". Edit one and pick another period or a set time to make it run again.
 
 A one-off period is removed on its own once it is over, together with the tasks that followed only it.
+
+### Holiday calendars
+
+Any `.ics` or `webcal://` link works. Shiftbell counts **every event in it as a day off**, except events that say they are not a public holiday (as Apple's do) and Ramadan, so pick a calendar that lists only days off. Some places to get one:
+
+| Source | Example link | Notes |
+| --- | --- | --- |
+| [Office Holidays](https://www.officeholidays.com) | `https://www.officeholidays.com/ics/malaysia/kuala-lumpur` | Public holidays only, by country and often by state. The safest choice. |
+| Apple (iCloud) | `https://calendars.icloud.com/holidays/my_en.ics` | `<country>_<language>`, such as `us_en`, `sg_en`, `jp_ja`. The same calendars Apple Calendar offers. The China one (`cn_zh`) also lists solar terms and festivals that are workdays. |
+| [Thunderbird](https://www.thunderbird.net/calendar/holidays/) | `https://www.thunderbird.net/media/caldata/autogen/MalaysiaHolidays.ics` | Many countries; the page lists the links. |
+| [CalendarLabs](https://www.calendarlabs.com/ical-calendar/holidays/) | `https://www.calendarlabs.com/ical-calendar/ics/42/Malaysia_Holidays.ics` | Many countries. |
+| Google Calendar | `https://calendar.google.com/calendar/ical/en.malaysia%23holiday%40group.v.calendar.google.com/public/basic.ics` | Swap `malaysia` for another country, `en` for a language. Also lists observances that are workdays, such as Valentine's Day, which Shiftbell would take as days off. |
+| [china-holiday-calender](https://github.com/lanceliao/china-holiday-calender) (mainland China) | `https://www.shuyz.com/githubfiles/china-holiday-calender/master/holidayCal-HO.ics` | Official days off, including the swapped ones. Use the `-HO` file: the plain `holidayCal.ics` also lists the make-up workdays (补班), which would be counted as days off. |
+
+Shiftbell has no make-up workdays, so a weekend that is a working day in China still counts as a day off. Add overtime for it.
+
+You can also subscribe to a company calendar if it publishes one, as long as it holds only days off.
 
 ### Other
 
