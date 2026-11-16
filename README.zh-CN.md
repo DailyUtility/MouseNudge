@@ -10,7 +10,7 @@ Shiftbell 是一个 macOS 菜单栏小工具，围绕上班时间运行定时任
 
 <img src="docs/images/menu-zh.png" width="400" alt="Shiftbell 菜单：顶部是状态，下面是休假、加班、时段和定时任务">
 
-- **上班时间**是「时段」里固定的第一行，只算工作日（周一到周五），默认 09:00–18:00。里面有一段午餐，默认 12:00–13:00，可以取消勾选。午餐不算上班：这段时间不挪鼠标，每隔几分钟的任务也会停下。像 22:00–06:00 这样跨午夜的夜班，算在开始的那一天。
+- **上班时间**是「时段」里固定的第一行，只算工作日（周一到周五，加上假期日历里的补班日），默认 09:00–18:00。里面有一段午餐，默认 12:00–13:00，可以取消勾选。午餐不算上班：这段时间不挪鼠标，每隔几分钟的任务也会停下。像 22:00–06:00 这样跨午夜的夜班，算在开始的那一天。
 - **时段**是一段有名字的时间，比如开会、专注，可以每天、每周、每月或只一次。时段只是给这段时间起名字、显示倒计时；定时任务可以在它开始或结束时运行，也可以在里面暂停。时段在工作日和有加班的日子生效，单次时段在它自己的日期生效。时段不会延长上班时间，要多上班就加加班。
 - **加班**（单天、连续多天或重复）和**休假**（整天或几个小时）。重复的加班周末照常，遇到节假日跳过。休假优先：休假期间不挪鼠标，加班不算，定时任务也暂停；勾了「休息日也运行」的和单次定时任务除外。
 - **节假日**来自任意日历订阅（`.ics` 或 `webcal://`，例如 Apple 日历里的节假日日历，或 officeholidays.com），在「更多 → 订阅假期日历」里设置。没设置时只排除周末。去哪里找日历见[节假日日历](#节假日日历)。
@@ -45,7 +45,7 @@ Shiftbell 是一个 macOS 菜单栏小工具，围绕上班时间运行定时任
 
 ### 节假日日历
 
-任何 `.ics` 或 `webcal://` 链接都能用。Shiftbell 会把里面**每一个事件都当成放假**，只跳过注明"不是公众假期"的事件（Apple 的日历有这个标注）和斋月开始，所以要选只列放假日的日历。可以从这些地方找：
+任何 `.ics` 或 `webcal://` 链接都能用。Shiftbell 会把里面**每一个事件都当成放假**，只跳过注明"不是公众假期"的事件（Apple 的日历有这个标注）和斋月开始，所以要选只列放假日的日历。补班日正好相反：日历里标为补班的日子（如 `春节 补班`，或 Apple 的 `春节（班）`）按工作日算，周末也一样要上班。可以从这些地方找：
 
 | 来源 | 示例链接 | 说明 |
 | --- | --- | --- |
@@ -54,9 +54,7 @@ Shiftbell 是一个 macOS 菜单栏小工具，围绕上班时间运行定时任
 | [Thunderbird](https://www.thunderbird.net/calendar/holidays/) | `https://www.thunderbird.net/media/caldata/autogen/MalaysiaHolidays.ics` | 国家很多，页面上有各国链接。 |
 | [CalendarLabs](https://www.calendarlabs.com/ical-calendar/holidays/) | `https://www.calendarlabs.com/ical-calendar/ics/42/Malaysia_Holidays.ics` | 国家很多。 |
 | Google 日历 | `https://calendar.google.com/calendar/ical/en.malaysia%23holiday%40group.v.calendar.google.com/public/basic.ics` | 把 `malaysia` 换成其他国家、`en` 换成语言（如 `zh-cn.china`）。也会列出植树节、教师节这类不放假的纪念日，Shiftbell 会把它们当成放假。 |
-| [china-holiday-calender](https://github.com/lanceliao/china-holiday-calender)（中国大陆） | `https://www.shuyz.com/githubfiles/china-holiday-calender/master/holidayCal-HO.ics` | 国务院公布的放假安排，包括调休放假的日子。要用 `-HO` 这个文件：不带后缀的 `holidayCal.ics` 还包含补班日，会被当成放假。 |
-
-Shiftbell 没有"补班"的概念，调休要上班的周末仍然按休息日算，可以给那天加一段加班。
+| [china-holiday-calender](https://github.com/lanceliao/china-holiday-calender)（中国大陆） | `https://www.shuyz.com/githubfiles/china-holiday-calender/master/holidayCal.ics` | 国务院公布的放假和补班安排，补班的周末按工作日算。只要放假日可以用 `holidayCal-HO.ics`。 |
 
 公司如果发布了自己的假期日历，也可以订阅，前提是里面只有放假日。
 

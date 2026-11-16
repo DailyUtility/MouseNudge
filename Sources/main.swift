@@ -45,7 +45,8 @@ var holidaySource: String { UserDefaults.standard.string(forKey: "holidaySource"
 
 let dayKey: DateFormatter = { let f = DateFormatter(); f.locale = Locale(identifier: "en_US_POSIX"); f.dateFormat = "yyyy-MM-dd"; return f }()
 
-struct HolidayCache: Codable { var fetched: String; var years: [Int]; var days: [String: String] }
+// `workdays` are make-up workdays (China's 补班): weekends the calendar says are worked, which count as working days.
+struct HolidayCache: Codable { var fetched: String; var years: [Int]; var days: [String: String]; var workdays: [String: String]? = nil }
 var holidays = HolidayCache(fetched: "", years: [], days: [:])
 
 // Personal leave, kept apart from holidays.json so a holiday refetch never wipes it. Dates are inclusive yyyy-MM-dd.
@@ -169,10 +170,11 @@ func icsUnescape(_ v: String) -> String {
 // iCalendar feed: every VEVENT is a day off from DTSTART up to DTEND (exclusive; one day when missing). Yearly RRULEs
 // (Apple lists fixed-date holidays that way) are expanded through next year, honouring COUNT and UNTIL. Events the feed
 // itself calls "not a national/public holiday" (Apple's state-only days and observances) and the start of Ramadan are skipped.
+// Make-up workdays ("春节 补班", Apple's "春节（班）") go to `workdays` instead.
 func parseICS(_ text: String) -> HolidayCache? {
     let unfolded = text.replacingOccurrences(of: "\r\n", with: "\n").replacingOccurrences(of: "\n ", with: "").replacingOccurrences(of: "\n\t", with: "")
     let c = Calendar.current, lastYear = c.component(.year, from: Date()) + 1
-    var days: [String: String] = [:]
+    var days: [String: String] = [:], workdays: [String: String] = [:]
     let calName = unfolded.components(separatedBy: "\n").first { $0.hasPrefix("X-WR-CALNAME") }.map { String($0.drop { $0 != ":" }.dropFirst()) } ?? ""
     for block in unfolded.components(separatedBy: "BEGIN:VEVENT").dropFirst() {
         var f: [String: String] = [:]
@@ -202,15 +204,18 @@ func parseICS(_ text: String) -> HolidayCache? {
                 starts.append(n); i += 1
             }
         }
+        let worked = name.contains("补班") || name.contains("調休上班") || name.contains("调休上班") || name.hasSuffix("（班）") || name.hasSuffix("(班)")
         for s in starts {
             for k in 0..<length {
                 let key = dayKey.string(from: c.date(byAdding: .day, value: k, to: s)!)
+                if worked { workdays[key] = name; continue }
                 days[key] = days[key].map { $0.contains(name) ? $0 : $0 + "、" + name } ?? name
             }
         }
     }
+    for key in workdays.keys { days[key] = nil }
     let years = Set(days.keys.compactMap { Int($0.prefix(4)) }).sorted()
-    return days.isEmpty ? nil : HolidayCache(fetched: ISO8601DateFormatter().string(from: Date()), years: years, days: days)
+    return days.isEmpty ? nil : HolidayCache(fetched: ISO8601DateFormatter().string(from: Date()), years: years, days: days, workdays: workdays.isEmpty ? nil : workdays)
 }
 
 // Why a holiday calendar could not be used, with the title and advice shown to the person.
@@ -285,8 +290,9 @@ func hidIdleSeconds() -> Double {
 }
 
 func isWorkday(_ d: Date) -> Bool {
-    guard let w = Calendar.current.dateComponents([.weekday], from: d).weekday, (2...6).contains(w) else { return false }
     let key = dayKey.string(from: d)
+    if holidays.workdays?[key] != nil { return leave(on: key) == nil }
+    guard let w = Calendar.current.dateComponents([.weekday], from: d).weekday, (2...6).contains(w) else { return false }
     return holidays.days[key] == nil && leave(on: key) == nil
 }
 
