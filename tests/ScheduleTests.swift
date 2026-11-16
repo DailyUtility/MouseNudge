@@ -433,5 +433,32 @@ check("lunch: night shift Fri 03:30 Sat", window("2026-11-14 03:30"), true)
 check("lunch: night shift Thu 02:30 Fri", window("2026-11-13 02:30"), false)
 reset()
 
+// Make-up workdays: a Saturday the calendar says is worked counts as a working day, holidays still don't
+let makeup = parseICS("""
+BEGIN:VCALENDAR
+BEGIN:VEVENT
+DTSTART;VALUE=DATE:20261117
+SUMMARY:国庆节 假期 第1天/共1天
+END:VEVENT
+BEGIN:VEVENT
+DTSTART;VALUE=DATE:20261114
+SUMMARY:国庆节 补班 第1天/共1天
+END:VEVENT
+BEGIN:VEVENT
+DTSTART;VALUE=DATE:20261115
+SUMMARY;LANGUAGE=zh_CN:春节（班）
+END:VEVENT
+END:VCALENDAR
+""")
+check("makeup: holiday kept", makeup?.days.keys.sorted() ?? [], ["2026-11-17"])
+check("makeup: workdays found", makeup?.workdays?.keys.sorted() ?? [], ["2026-11-14", "2026-11-15"])
+holidays = makeup!
+check("makeup: Saturday is a workday", window("2026-11-14 10:00"), true)
+check("makeup: Sunday is a workday", window("2026-11-15 10:00"), true)
+check("makeup: holiday stays off", window("2026-11-17 10:00"), false)
+leaves = [Leave(start: "2026-11-14", end: "2026-11-14", note: "")]
+check("makeup: leave wins", window("2026-11-14 10:00"), false)
+reset()
+
 print(failures == 0 ? "OK: \(checks) checks passed" : "\(failures) of \(checks) checks failed")
 exit(failures == 0 ? 0 : 1)

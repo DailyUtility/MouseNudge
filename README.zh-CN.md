@@ -10,10 +10,10 @@ Shiftbell 是一个 macOS 菜单栏小工具，围绕上班时间运行定时任
 
 <img src="docs/images/menu-zh.png" width="400" alt="Shiftbell 菜单：顶部是状态，下面是休假、加班、时段和定时任务">
 
-- **上班时间**是「时段」里固定的第一行，只算工作日（周一到周五），默认 09:00–18:00。里面有一段午餐，默认 12:00–13:00，可以取消勾选。午餐不算上班：这段时间不挪鼠标，每隔几分钟的任务也会停下。像 22:00–06:00 这样跨午夜的夜班，算在开始的那一天。
+- **上班时间**是「时段」里固定的第一行，只算工作日（周一到周五，加上假期日历里的补班日），默认 09:00–18:00。里面有一段午餐，默认 12:00–13:00，可以取消勾选。午餐不算上班：这段时间不挪鼠标，每隔几分钟的任务也会停下。像 22:00–06:00 这样跨午夜的夜班，算在开始的那一天。
 - **时段**是一段有名字的时间，比如开会、专注，可以每天、每周、每月或只一次。时段只是给这段时间起名字、显示倒计时；定时任务可以在它开始或结束时运行，也可以在里面暂停。时段在工作日和有加班的日子生效，单次时段在它自己的日期生效。时段不会延长上班时间，要多上班就加加班。
 - **加班**（单天、连续多天或重复）和**休假**（整天或几个小时）。重复的加班周末照常，遇到节假日跳过。休假优先：休假期间不挪鼠标，加班不算，定时任务也暂停；勾了「休息日也运行」的和单次定时任务除外。
-- **节假日**来自任意日历订阅（`.ics` 或 `webcal://`，例如 Apple 日历里的节假日日历，或 officeholidays.com），在「更多 → 订阅假期日历」里设置。没设置时只排除周末。
+- **节假日**来自任意日历订阅（`.ics` 或 `webcal://`，例如 Apple 日历里的节假日日历，或 officeholidays.com），在菜单上方的「假期」那一行里点「添加假期日历…」。可以存多个，在同一个子菜单里打勾切换（下面列着今年的假期；今年的都放完后，日历里如果已有明年的，也一起列出）；每个日历的假期都单独保存，切换时不用联网；正在用的日历每月和每年年初自动重新下载一次。没添加或勾选「不用（只排除周末）」时只排除周末。「删除当前日历…」会把打勾的那个从列表里删掉。去哪里找日历见[节假日日历](#节假日日历)。
 - 每月重复可以按星期（第一到第五个或最后一个星期几），也可以按日期（几号、最后一天或倒数第几天），加班、时段和定时任务都一样。
 
 ### 定时任务
@@ -42,6 +42,21 @@ Shiftbell 是一个 macOS 菜单栏小工具，围绕上班时间运行定时任
 - **只删时段，保留任务**：任务保留，标为「不会运行，请重新选时间」。编辑它，重新选一个时段或改成定时，就会照常运行。
 
 单次时段过期后会自动清除，只跟随它的任务也会一起删除。
+
+### 节假日日历
+
+任何 `.ics` 或 `webcal://` 链接都能用。Shiftbell 会把里面**每一个事件都当成放假**，只跳过注明"不是公众假期"的事件（Apple 的日历有这个标注）和斋月开始，所以要选只列放假日的日历。补班日正好相反：日历里标为补班的日子（如 `春节 补班`，或 Apple 的 `春节（班）`）按工作日算，周末也一样要上班。可以从这些地方找：
+
+| 来源 | 示例链接 | 说明 |
+| --- | --- | --- |
+| [Office Holidays](https://www.officeholidays.com) | `https://www.officeholidays.com/ics/malaysia/kuala-lumpur` | 只有公众假期，分国家，很多还分州/省。最稳妥。 |
+| Apple（iCloud） | `https://calendars.icloud.com/holidays/my_en.ics` | 格式是 `<国家>_<语言>`，比如 `us_en`、`sg_en`、`jp_ja`，和 Apple 日历里的节假日日历是同一份。中国的（`cn_zh`）还包含节气和不放假的节日，不建议用。 |
+| [Thunderbird](https://www.thunderbird.net/calendar/holidays/) | `https://www.thunderbird.net/media/caldata/autogen/MalaysiaHolidays.ics` | 国家很多，页面上有各国链接。 |
+| [CalendarLabs](https://www.calendarlabs.com/ical-calendar/holidays/) | `https://www.calendarlabs.com/ical-calendar/ics/42/Malaysia_Holidays.ics` | 国家很多。 |
+| Google 日历 | `https://calendar.google.com/calendar/ical/en.malaysia%23holiday%40group.v.calendar.google.com/public/basic.ics` | 把 `malaysia` 换成其他国家、`en` 换成语言（如 `zh-cn.china`）。也会列出植树节、教师节这类不放假的纪念日，Shiftbell 会把它们当成放假。 |
+| [china-holiday-calender](https://github.com/lanceliao/china-holiday-calender)（中国大陆） | `https://www.shuyz.com/githubfiles/china-holiday-calender/master/holidayCal.ics` | 国务院公布的放假和补班安排，补班的周末按工作日算。只要放假日可以用 `holidayCal-HO.ics`。 |
+
+公司如果发布了自己的假期日历，也可以订阅，前提是里面只有放假日。
 
 ### 其他
 
@@ -93,7 +108,7 @@ cd MouseNudge
 
 | 文件 | 内容 |
 | --- | --- |
-| `holidays.json` | 缓存的节假日 |
+| `holidays.json`、`holiday-calendars.json` | 当前日历的节假日，以及每个已保存日历的副本 |
 | `leave.json`、`overtime.json`、`periods.json` | 休假、加班和时段 |
 | `tasks.json` | 定时任务，包括挪鼠标 |
 | `nudge.log` | 运行记录 |
