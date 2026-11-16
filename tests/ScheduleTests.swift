@@ -155,6 +155,10 @@ check("period task: old start silent", due("2026-11-13 12:00").count, 0)
 check("period task: end moves", due("2026-11-13 12:30").count, 1)
 periods[0].disabled = true
 check("period task: period off", due("2026-11-13 11:30").count, 0)
+check("period task: held with its period", jobHeld(jobs[0]), true)
+periods[0].disabled = nil
+check("period task: resumed with its period", jobHeld(jobs[0]), false)
+periods[0].disabled = true
 periods = [Period(id: "late", from: "23:00", to: "01:00", note: "", rule: "once:2026-11-14")]
 jobs = [Job(action: "notify", when: "end", follow: ["late"])]
 check("period task: overnight one-off ends next day", due("2026-11-15 01:00").count, 1)
@@ -229,6 +233,17 @@ check("apps: Saturday overtime", appWanted(app, at("2026-11-14 11:00")), true)
 var ot = appJob("B", follow: ["overtime"])
 check("apps: overtime only", appWanted(ot, at("2026-11-14 11:00")), true)
 check("apps: overtime only skips work hours", appWanted(ot, at("2026-11-13 10:00")), false)
+overtimes[0].disabled = true
+check("apps: overtime paused, app stays shut", appWanted(ot, at("2026-11-14 11:00")), false)
+check("held: overtime paused", jobHeld(ot), true)
+check("held: work is never held", jobHeld(appJob("W")), false)
+check("held: a timed task is not held", jobHeld(Job(action: "notify", when: "at", at: "10:00")), false)
+jobs = [Job(action: "notify", text: "ot", when: "start", follow: ["overtime"])]
+check("held: no pop-up at a paused overtime", due("2026-11-14 10:00").count, 0)
+overtimes[0].disabled = nil
+check("held: pop-up once resumed", due("2026-11-14 10:00"), ["ot"])
+check("held: overtime resumed", jobHeld(ot), false)
+jobs = []
 ot.disabled = true
 check("apps: turned off", appWanted(ot, at("2026-11-14 11:00")), false)
 check("apps: only app tasks", appWanted(Job(action: "notify", when: "start"), at("2026-11-13 10:00")), false)

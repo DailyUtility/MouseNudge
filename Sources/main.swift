@@ -408,6 +408,15 @@ func followSpans(_ f: String, _ d: Date) -> [(from: String, to: String)] {
 }
 func jobSpans(_ j: Job, _ d: Date) -> [(from: String, to: String)] { follows(j).flatMap { followSpans($0, d) } }
 func appSpans(_ j: Job, _ d: Date) -> [(from: String, to: String)] { jobSpans(j, d).map { widened($0, lead: j.lead ?? 0, lag: j.lag ?? 0) } }
+// A task that follows only paused entries (overtime with every entry paused, or paused periods) is held with them.
+func followPaused(_ f: String) -> Bool {
+    switch f {
+    case "work": return false
+    case "overtime": return !overtimes.isEmpty && overtimes.allSatisfy { $0.disabled == true }
+    case let id: return periods.first { $0.id == id }?.disabled == true
+    }
+}
+func jobHeld(_ j: Job) -> Bool { j.when != "at" && j.action != "nudge" && follows(j).allSatisfy(followPaused) }
 func appWanted(_ j: Job, _ d: Date) -> Bool { j.action == "app" && j.disabled != true && covered(d) { appSpans(j, $0) } }
 
 // HH:mm on a day as a moment; "24:00" is the next midnight.
@@ -1347,7 +1356,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         return when + "  " + what
     }
     func rebuildTasksMenu() {
-        fill(tasksRoot, jobs.map { (jobLabel($0), $0.disabled == true) }, toggle: { [unowned self] i in
+        fill(tasksRoot, jobs.map { (jobLabel($0) + (jobHeld($0) ? T("common.paren", T("job.heldTag")) : ""), $0.disabled == true) }, toggle: { [unowned self] i in
             defer { saveJSON(jobs, to: jobsURL); jobsChanged() }; return flip(&jobs[i].disabled, jobLabel(jobs[i]))
         }, edit: { [unowned self] in editJob(jobs[$0]) }, remove: removeJob, add: (T("menu.addTask"), #selector(addJob), ""))
     }

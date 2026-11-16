@@ -258,6 +258,7 @@ let translations: [String: [String: String]] = [
         "period.deleteTasks": "只跟随这个时段的定时任务也会删除：%@",
         "job.anyDay": "休息日也运行（周末、节假日、请假）",
         "job.anyDayTag": "含休息日",
+        "job.heldTag": "已随之暂停",
     ],
     "en": [
         "week.first": "1st",
@@ -517,6 +518,7 @@ let translations: [String: [String: String]] = [
         "period.deleteTasks": "Tasks that follow only this period are deleted too: %@",
         "job.anyDay": "Also on days off (weekends, holidays, leave)",
         "job.anyDayTag": "days off too",
+        "job.heldTag": "paused with it",
     ],
     "zh-Hant": [
         "week.first": "第一個",
@@ -776,6 +778,7 @@ let translations: [String: [String: String]] = [
         "period.deleteTasks": "只跟隨這個時段的定時任務也會刪除：%@",
         "job.anyDay": "休息日也執行（週末、假日、請假）",
         "job.anyDayTag": "含休息日",
+        "job.heldTag": "已隨之暫停",
     ],
     "ja": [
         "week.first": "第1",
@@ -1035,6 +1038,7 @@ let translations: [String: [String: String]] = [
         "period.deleteTasks": "この時間帯だけに従うタスクも削除されます：%@",
         "job.anyDay": "休日も実行（週末・祝日・休暇）",
         "job.anyDayTag": "休日も",
+        "job.heldTag": "一緒に一時停止中",
     ],
     "ko": [
         "week.first": "첫째",
@@ -1294,6 +1298,7 @@ let translations: [String: [String: String]] = [
         "period.deleteTasks": "이 시간대만 따르는 작업도 삭제됩니다: %@",
         "job.anyDay": "쉬는 날에도 실행(주말·공휴일·휴가)",
         "job.anyDayTag": "쉬는 날 포함",
+        "job.heldTag": "함께 일시 중지됨",
     ],
     "ms": [
         "week.first": "pertama",
@@ -1553,6 +1558,7 @@ let translations: [String: [String: String]] = [
         "period.deleteTasks": "Tugasan yang hanya mengikut tempoh ini turut dipadam: %@",
         "job.anyDay": "Juga pada hari cuti (hujung minggu, cuti umum, cuti)",
         "job.anyDayTag": "termasuk hari cuti",
+        "job.heldTag": "dijeda bersama",
     ],
     "es": [
         "week.first": "primer",
@@ -1812,6 +1818,7 @@ let translations: [String: [String: String]] = [
         "period.deleteTasks": "También se eliminan las tareas que solo siguen este periodo: %@",
         "job.anyDay": "También en días libres (fines de semana, festivos, permisos)",
         "job.anyDayTag": "incl. días libres",
+        "job.heldTag": "en pausa con ello",
     ],
     "fr": [
         "week.first": "1er",
@@ -2071,6 +2078,7 @@ let translations: [String: [String: String]] = [
         "period.deleteTasks": "Les tâches qui suivent seulement cette période sont aussi supprimées : %@",
         "job.anyDay": "Aussi les jours de repos (week-ends, fériés, congés)",
         "job.anyDayTag": "jours de repos inclus",
+        "job.heldTag": "en pause avec lui",
     ],
     "de": [
         "week.first": "1.",
@@ -2330,6 +2338,7 @@ let translations: [String: [String: String]] = [
         "period.deleteTasks": "Aufgaben, die nur diesem Zeitraum folgen, werden ebenfalls gelöscht: %@",
         "job.anyDay": "Auch an freien Tagen (Wochenende, Feiertage, Urlaub)",
         "job.anyDayTag": "auch freie Tage",
+        "job.heldTag": "mit pausiert",
     ],
 ]
 // Template order.
@@ -2591,4 +2600,5 @@ let translationKeys: [String] = [
     "period.deleteTasks",
     "job.anyDay",
     "job.anyDayTag",
+    "job.heldTag",
 ]
