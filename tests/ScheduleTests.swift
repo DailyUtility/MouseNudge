@@ -94,51 +94,88 @@ check("rule: last day of February", ruleApplies("monthday:-1", on: at("2026-02-2
 check("rule: second to last day", ruleApplies("monthday:-2", on: at("2026-11-29 12:00")), true)
 check("rule: no 31st in November", ruleApplies("monthday:31", on: at("2026-11-30 12:00")), false)
 
-// Reminders (2026-11-13 is a Friday, 11-14 a Saturday)
+// Tasks (2026-11-13 is a Friday, 11-14 a Saturday)
 reset(start: "09:00", end: "18:00")
-reminders = [Reminder(at: "10:00", note: "standup", rule: nil), Reminder(at: "14:00", note: "", rule: "once:2026-11-14"),
-             Reminder(at: "11:00", note: "off", rule: nil, disabled: true)]
-check("remind: daily on a workday", remindersDue(at("2026-11-13 10:00")), ["standup"])
-check("remind: not a minute later", remindersDue(at("2026-11-13 10:01")), [String]())
-check("remind: daily skips Saturday", remindersDue(at("2026-11-14 10:00")), [String]())
-check("remind: one-off rings on Saturday", remindersDue(at("2026-11-14 14:00")).count, 1)
-check("remind: turned off", remindersDue(at("2026-11-13 11:00")), [String]())
-reminders = [workReminder("start"), workReminder("end")]
-check("remind: start of work", remindersDue(at("2026-11-13 09:00")).count, 1)
-check("remind: end of work", remindersDue(at("2026-11-13 18:00")).count, 1)
-check("remind: no start on Saturday", remindersDue(at("2026-11-14 09:00")).count, 0)
+func due(_ s: String) -> [String] { jobsDue(at(s)).map(\.text) }
+jobs = [Job(action: "notify", text: "standup", when: "at", at: "10:00"), Job(action: "notify", when: "at", at: "14:00", rule: "once:2026-11-14"),
+        Job(disabled: true, action: "notify", text: "off", when: "at", at: "11:00"), Job(action: "url", text: "https://example.com", when: "at", at: "15:00")]
+check("task: daily on a workday", due("2026-11-13 10:00"), ["standup"])
+check("task: not a minute later", due("2026-11-13 10:01"), [String]())
+check("task: daily skips Saturday", due("2026-11-14 10:00"), [String]())
+check("task: one-off rings on Saturday", due("2026-11-14 14:00"), [T("reminder.untitled", "14:00")])
+check("task: turned off", due("2026-11-13 11:00"), [String]())
+check("task: a link is due with its link", jobsDue(at("2026-11-13 15:00")).map(\.job.action), ["url"])
+check("task: link text", due("2026-11-13 15:00"), ["https://example.com"])
+jobs = defaultJobs(nudging: true, interval: 15)
+check("task: default nudge interval", nudgeJob?.every, 15)
+check("task: nudge on", nudging, true)
+check("task: start of work", due("2026-11-13 09:00"), [T("reminder.workStart")])
+check("task: end of work", due("2026-11-13 18:00"), [T("reminder.workEnd")])
+check("task: the nudge is never due", due("2026-11-13 09:30").count, 0)
+check("task: no start on Saturday", due("2026-11-14 09:00").count, 0)
+check("task: fresh install nudge off", defaultJobs(nudging: false, interval: 10).first?.disabled, true)
+overtimes = [Overtime(from: "18:00", to: "20:00", note: "", rule: "once:2026-11-13")]
+check("task: overtime joins work, no end at 18:00", due("2026-11-13 18:00").count, 0)
+check("task: end after the overtime", due("2026-11-13 20:00"), [T("reminder.workEnd")])
+overtimes = []
 reset(start: "22:00", end: "06:00")
-check("remind: night shift ends next morning", remindersDue(at("2026-11-14 06:00")).count, 1)
-check("remind: no end after Saturday night", remindersDue(at("2026-11-15 06:00")).count, 0)
-workEnd = "19:00"; syncWorkReminders()
-check("remind: end follows the work hours", remindersDue(at("2026-11-13 19:00")).count, 1)
-reminders[1].disabled = true
-check("remind: end turned off", remindersDue(at("2026-11-13 19:00")).count, 0)
-reminders = []
-reset(start: "09:00", end: "18:00")
+check("task: night shift ends next morning", due("2026-11-14 06:00").count, 1)
+check("task: no end after Saturday night", due("2026-11-15 06:00").count, 0)
+reset()
+workEnd = "19:00"
+check("task: end follows the work hours", due("2026-11-13 19:00").count, 1)
+jobs[2].disabled = true
+check("task: end turned off", due("2026-11-13 19:00").count, 0)
+reset()
+jobs = [Job(action: "notify", when: "both", follow: ["work"], offset: 10)]
+check("task: minutes early", due("2026-11-13 08:50"), [T("job.startsIn", T("apps.followWork"), "10")])
+check("task: early before the end", due("2026-11-13 17:50"), [T("job.endsIn", T("apps.followWork"), "10")])
+check("task: not at the edge itself", due("2026-11-13 09:00").count, 0)
+jobs = []
 
-// Period reminders follow the period as it is now
+// Period tasks follow the period as it is now
 periods = [Period(id: "lunch", from: "12:00", to: "13:00", note: "lunch", rule: nil)]
-reminders = [periodReminder(periods[0], end: false), periodReminder(periods[0], end: true)]
-check("period remind: start", remindersDue(at("2026-11-13 12:00")), [T("reminder.periodStart", "lunch")])
-check("period remind: end", remindersDue(at("2026-11-13 13:00")), [T("reminder.periodEnd", "lunch")])
-check("period remind: not on Saturday", remindersDue(at("2026-11-14 12:00")).count, 0)
+jobs = [Job(action: "notify", when: "both", follow: ["lunch"])]
+check("period task: start", due("2026-11-13 12:00"), [T("reminder.periodStart", "lunch")])
+check("period task: end", due("2026-11-13 13:00"), [T("reminder.periodEnd", "lunch")])
+check("period task: not on Saturday", due("2026-11-14 12:00").count, 0)
 periods[0].from = "11:30"; periods[0].to = "12:30"; periods[0].note = "food"
-check("period remind: start moves", remindersDue(at("2026-11-13 11:30")), [T("reminder.periodStart", "food")])
-check("period remind: old start silent", remindersDue(at("2026-11-13 12:00")).count, 0)
-check("period remind: end moves", remindersDue(at("2026-11-13 12:30")).count, 1)
+check("period task: start moves", due("2026-11-13 11:30"), [T("reminder.periodStart", "food")])
+check("period task: old start silent", due("2026-11-13 12:00").count, 0)
+check("period task: end moves", due("2026-11-13 12:30").count, 1)
 periods[0].disabled = true
-check("period remind: period off", remindersDue(at("2026-11-13 11:30")).count, 0)
+check("period task: period off", due("2026-11-13 11:30").count, 0)
 periods = [Period(id: "late", from: "23:00", to: "01:00", note: "", rule: "once:2026-11-14")]
-reminders = [periodReminder(periods[0], end: true)]
-check("period remind: overnight one-off ends next day", remindersDue(at("2026-11-15 01:00")).count, 1)
+jobs = [Job(action: "notify", when: "end", follow: ["late"])]
+check("period task: overnight one-off ends next day", due("2026-11-15 01:00").count, 1)
 periods = []
-check("period remind: period gone", remindersDue(at("2026-11-15 01:00")).count, 0)
-reminders = []
+check("period task: period gone", due("2026-11-15 01:00").count, 0)
+jobs = []
 
-// Menu bar: the countdown before a break or reminder
+// Every few minutes while inside what the task follows
+reset()
+periods = [Period(id: "lunch", from: "12:00", to: "13:00", note: "", rule: nil)]
+jobs = [Job(action: "notify", text: "water", when: "every", every: 30)]
+check("every: on the mark", due("2026-11-13 10:30"), ["water"])
+check("every: off the mark", due("2026-11-13 10:15").count, 0)
+check("every: not before work", due("2026-11-13 08:30").count, 0)
+check("every: not on Saturday", due("2026-11-14 10:30").count, 0)
+check("every: quiet in a break", due("2026-11-13 12:30").count, 0)
+jobs = [Job(action: "notify", text: "stretch", when: "every", follow: ["lunch"], every: 30)]
+check("every: inside the break it follows", due("2026-11-13 12:30"), ["stretch"])
+jobs = []; periods = []
+
+// How far through work, for the menu bar icon
+reset()
+check("progress: half way", workProgress(at("2026-11-13 13:30")), 0.5)
+check("progress: outside work", workProgress(at("2026-11-13 19:00")), 0)
+overtimes = [Overtime(from: "18:00", to: "21:00", note: "", rule: "once:2026-11-13")]
+check("progress: overtime stretches the day", workProgress(at("2026-11-13 15:00")), 0.5)
+overtimes = []
+
+// Menu bar: the countdown before a break or pop-up
 periods = [Period(from: "12:00", to: "13:00", note: "lunch", rule: nil)]
-reminders = [Reminder(at: "14:00", note: "meeting", rule: nil)]
+jobs = [Job(action: "notify", text: "meeting", when: "at", at: "14:00"), Job(action: "notify", text: "water", when: "every", every: 5)]
 check("event: lunch in 5 minutes", upcomingEvent(after: at("2026-11-13 11:55"), within: 600)?.name, "lunch")
 check("event: at the break start", upcomingEvent(after: at("2026-11-13 11:55"), within: 600).map { show($0.at) }, "2026-11-13 12:00")
 check("event: exactly 10 minutes", upcomingEvent(after: at("2026-11-13 11:50"), within: 600)?.name, "lunch")
@@ -148,7 +185,7 @@ check("event: nothing on Saturday", upcomingEvent(after: at("2026-11-14 11:55"),
 periods = [Period(from: "15:00", to: "16:00", note: "review", rule: nil, work: true), Period(from: "12:00", to: "13:00", note: "", rule: nil)]
 check("event: work period with a note", upcomingEvent(after: at("2026-11-13 14:55"), within: 600)?.name, "review")
 check("event: unnamed break", upcomingEvent(after: at("2026-11-13 11:55"), within: 600)?.name, T("period.rest"))
-reminders = []; periods = []
+jobs = []; periods = []
 reset()
 
 // Work periods count as work time, on working days only
@@ -163,8 +200,11 @@ check("work period: one-off on Saturday", window("2026-11-14 10:30"), true)
 periods = []
 
 // Apps follow work hours (with overtime), overtime only, or a period, widened by lead and lag
+func appJob(_ name: String, follow: [String]? = nil, lead: Int? = nil, lag: Int? = nil) -> Job {
+    Job(action: "app", name: name, path: "/\(name).app", when: "during", follow: follow, lead: lead, lag: lag)
+}
 reset()
-var app = WatchedApp(name: "A", path: "/A.app")
+var app = appJob("A")
 check("apps: before work", appWanted(app, at("2026-11-13 08:59")), false)
 check("apps: work hours", appWanted(app, at("2026-11-13 09:00")), true)
 check("apps: closed at the end", appWanted(app, at("2026-11-13 18:00")), false)
@@ -176,30 +216,31 @@ check("apps: quit after the lag", appWanted(app, at("2026-11-13 18:15")), false)
 check("apps: Saturday off", appWanted(app, at("2026-11-14 10:00")), false)
 overtimes = [Overtime(from: "10:00", to: "12:00", note: "", rule: "once:2026-11-14")]
 check("apps: Saturday overtime", appWanted(app, at("2026-11-14 11:00")), true)
-var ot = WatchedApp(name: "B", path: "/B.app", follow: ["overtime"])
+var ot = appJob("B", follow: ["overtime"])
 check("apps: overtime only", appWanted(ot, at("2026-11-14 11:00")), true)
 check("apps: overtime only skips work hours", appWanted(ot, at("2026-11-13 10:00")), false)
 ot.disabled = true
 check("apps: turned off", appWanted(ot, at("2026-11-14 11:00")), false)
+check("apps: only app tasks", appWanted(Job(action: "notify", when: "start"), at("2026-11-13 10:00")), false)
 overtimes = []
 periods = [Period(id: "m", from: "14:00", to: "15:00", note: "", rule: nil, work: true)]
-let meet = WatchedApp(name: "C", path: "/C.app", follow: ["m"], lead: 5, lag: 0)
+let meet = appJob("C", follow: ["m"], lead: 5, lag: 0)
 check("apps: period lead", appWanted(meet, at("2026-11-13 13:55")), true)
 check("apps: period over", appWanted(meet, at("2026-11-13 15:00")), false)
-check("apps: deleted period", appWanted(WatchedApp(name: "D", path: "/D.app", follow: ["gone"]), at("2026-11-13 14:30")), false)
+check("apps: deleted period", appWanted(appJob("D", follow: ["gone"]), at("2026-11-13 14:30")), false)
 overtimes = [Overtime(from: "10:00", to: "12:00", note: "", rule: "once:2026-11-14")]
-let both = WatchedApp(name: "E", path: "/E.app", follow: ["m", "overtime"])
+let both = appJob("E", follow: ["m", "overtime"])
 check("apps: several follows, period", appWanted(both, at("2026-11-13 14:30")), true)
 check("apps: several follows, overtime", appWanted(both, at("2026-11-14 11:00")), true)
 check("apps: several follows, neither", appWanted(both, at("2026-11-13 10:00")), false)
 overtimes = []
 periods = []
 reset(start: "01:00", end: "06:00")
-app = WatchedApp(name: "A", path: "/A.app", lead: 120, lag: 0)
+app = appJob("A", lead: 120, lag: 0)
 check("apps: early opening stops at midnight", appWanted(app, at("2026-11-13 00:30")), true)
 check("apps: no wrap into the night before", appWanted(app, at("2026-11-12 23:30")), false)
 reset(start: "22:00", end: "06:00")
-app = WatchedApp(name: "A", path: "/A.app", lead: 0, lag: 60)
+app = appJob("A", lead: 0, lag: 60)
 check("apps: night shift lag", appWanted(app, at("2026-11-14 06:30")), true)
 check("apps: night shift over", appWanted(app, at("2026-11-14 07:00")), false)
 
@@ -215,7 +256,7 @@ check("off: work period ignored", window("2026-11-13 19:30"), false)
 periods = []
 overtimes = [Overtime(from: "10:00", to: "12:00", note: "", rule: "once:2026-11-14", disabled: true)]
 check("off: overtime ignored", overtime(on: at("2026-11-14 11:00")).count, 0)
-check("off: no Saturday apps", appWanted(WatchedApp(name: "A", path: "/A.app"), at("2026-11-14 11:00")), false)
+check("off: no Saturday apps", appWanted(appJob("A"), at("2026-11-14 11:00")), false)
 overtimes = []
 
 // Log quarters
