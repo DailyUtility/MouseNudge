@@ -394,5 +394,11 @@ check("quarter: Jan", quarterKey(at("2026-01-01 00:00")), "2026-Q1")
 check("quarter: end of Mar", quarterKey(at("2026-03-31 23:59")), "2026-Q1")
 check("quarter: Apr", quarterKey(at("2026-04-01 00:00")), "2026-Q2")
 
+check("overlap: inside work", clockOverlap(("12:00", "13:00"), ("09:00", "18:00")), true)
+check("overlap: after work", clockOverlap(("20:00", "23:00"), ("09:00", "18:00")), false)
+check("overlap: touching end", clockOverlap(("18:00", "19:00"), ("09:00", "18:00")), false)
+check("overlap: night shift", clockOverlap(("23:00", "01:00"), ("22:00", "06:00")), true)
+check("overlap: past midnight into day", clockOverlap(("08:00", "10:00"), ("22:00", "09:00")), true)
+
 print(failures == 0 ? "OK: \(checks) checks passed" : "\(failures) of \(checks) checks failed")
 exit(failures == 0 ? 0 : 1)

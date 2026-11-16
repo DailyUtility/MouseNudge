@@ -399,6 +399,19 @@ var nudging: Bool { nudgeJob.map { $0.disabled != true } ?? false }
 func applyNudge() { intervalMinutes = nudgeJob?.every ?? 10 }
 
 func minutesOf(_ hm: String) -> Int { let p = hm.split(separator: ":").compactMap { Int($0) }; return p.count == 2 ? p[0] * 60 + p[1] : 0 }
+// Whether two daily stretches share any time of day; an end at or before its start runs past midnight.
+func clockOverlap(_ a: (String, String), _ b: (String, String)) -> Bool {
+    func parts(_ f: String, _ t: String) -> [Range<Int>] {
+        let x = minutesOf(f), y = minutesOf(t)
+        return x < y ? [x..<y] : [x..<1440, 0..<y].filter { !$0.isEmpty }
+    }
+    return parts(a.0, a.1).contains { r in parts(b.0, b.1).contains { r.overlaps($0) } }
+}
+// Whether the nudge can run in a period at all: it has to touch work hours or some overtime (one over several days covers whole days).
+func periodMeetsWork(_ p: Period) -> Bool {
+    clockOverlap((p.from, p.to), (workStart, workEnd))
+        || overtimes.contains { $0.disabled != true && ($0.until != nil || clockOverlap((p.from, p.to), ($0.from, $0.to))) }
+}
 func hmOf(_ m: Int) -> String { String(format: "%02d:%02d", m / 60 % 24, m % 60) }
 // Opening early stops at midnight, so the stretch still belongs to its own day; it never grows to a whole day.
 // A stretch that runs to midnight (a day inside overtime over several days) is not stretched past it.
@@ -1278,8 +1291,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         // Repeating ones first, then one-offs by date; finished one-offs are removed by pruneExpired.
         overtimes.sort { ($0.start ?? onceDay($0.rule) ?? "", $0.from) < ($1.start ?? onceDay($1.rule) ?? "", $1.from) }
         fill(overtimeRoot, overtimes.map { (otLabel($0), $0.disabled == true) }, toggle: { [unowned self] i in
-            defer { saveJSON(overtimes, to: overtimeURL); replan() }; return flip(&overtimes[i].disabled, otLabel(overtimes[i]))
+            defer { saveJSON(overtimes, to: overtimeURL); replan(); rebuildPeriodMenu() }; return flip(&overtimes[i].disabled, otLabel(overtimes[i]))
         }, edit: { [unowned self] in editOvertime(overtimes[$0]) }, remove: removeOvertime, add: (T("menu.addOvertime"), #selector(addOvertime), "o"))
+        // Periods say whether the nudge runs in them, which depends on overtime.
+        rebuildPeriodMenu()
     }
     @objc func addOvertime() { editOvertime(nil) }
     func editOvertime(_ old: Overtime?) {
@@ -1327,9 +1342,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         // Repeating ones first, then one-offs by date; finished one-offs are removed by pruneExpired.
         periods.sort { (onceDay($0.rule) ?? "", $0.from) < (onceDay($1.rule) ?? "", $1.from) }
         // Work hours come first; they can't be turned off or deleted, only edited.
-        // While the nudge is on, each row says whether it pauses there, which is set on the nudge task.
+        // While the nudge is on, each row says whether it pauses there, which is set on the nudge task; a period outside
+        // work hours and overtime gets no word, since the nudge never runs there.
         let quiet = Set(nudgeJob?.skip ?? [])
-        let tag = { (p: Period) in nudging ? T("common.paren", T(quiet.contains(p.id) ? "period.nudgePaused" : "period.nudgeKept")) : "" }
+        let tag = { (p: Period) in
+            !nudging ? "" : quiet.contains(p.id) ? T("common.paren", T("period.nudgePaused")) : periodMeetsWork(p) ? T("common.paren", T("period.nudgeKept")) : ""
+        }
         fill(periodRoot, periods.map { (periodLabel($0) + tag($0), $0.disabled == true) }, toggle: { [unowned self] i in
             defer { saveJSON(periods, to: periodsURL); replan(); checkApps() }; return flip(&periods[i].disabled, periodLabel(periods[i]))
         }, edit: { [unowned self] in editPeriod(periods[$0]) }, remove: removePeriod, add: (T("menu.addPeriod"), #selector(addPeriod), "b"), head: [workHoursItem])
@@ -1674,7 +1692,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         let (s, e) = (hmFmt.string(from: t1.dateValue), hmFmt.string(from: t2.dateValue))
         UserDefaults.standard.set(s, forKey: "workStart"); UserDefaults.standard.set(e, forKey: "workEnd")
         workHoursItem.title = T("menu.workHours", s, endText(s, e))
-        appendLog(T("log.workHoursChanged", s, endText(s, e))); rebuildTasksMenu()
+        appendLog(T("log.workHoursChanged", s, endText(s, e))); rebuildPeriodMenu(); rebuildTasksMenu()
         next = nextSlot(after: Date()); tick()
     }
     @objc func togglePause() { paused.toggle(); UserDefaults.standard.set(paused, forKey: "paused"); tick() }
