@@ -462,7 +462,9 @@ func followPaused(_ f: String) -> Bool {
     case let id: return periods.first { $0.id == id }?.disabled == true
     }
 }
-func jobHeld(_ j: Job) -> Bool { j.when != "at" && j.action != "nudge" && follows(j).allSatisfy(followPaused) }
+func jobHeld(_ j: Job) -> Bool { j.when != "at" && j.action != "nudge" && !follows(j).isEmpty && follows(j).allSatisfy(followPaused) }
+// A task kept when the only period it followed was deleted: it follows nothing and does not run until given a time again.
+func jobUnbound(_ j: Job) -> Bool { j.when != "at" && j.action != "nudge" && follows(j).isEmpty }
 func appWanted(_ j: Job, _ d: Date) -> Bool { j.action == "app" && j.disabled != true && !onPartLeave(d) && covered(d) { appSpans(j, $0) } }
 
 // HH:mm on a day as a moment; "24:00" is the next midnight.
@@ -1451,13 +1453,27 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         saveJSON(periods, to: periodsURL); rebuildTasksMenu()
         replan(); checkApps()
     }
-    // Tasks that follow nothing else go with it.
+    // Tasks that follow nothing else are deleted with it, or kept following nothing, as the person picks.
     func removePeriod(_ i: Int) {
         guard periods.indices.contains(i) else { return }
         let p = periods[i], bound = jobs.filter { $0.follow == [p.id] }.map(jobLabel)
-        guard confirmRemove(T("confirm.deletePeriod"), periodLabel(p) + (bound.isEmpty ? "" : "\n\n" + T("period.deleteTasks", bound.joined(separator: T("common.listSeparator"))))) else { return }
+        var keepTasks = false
+        if bound.isEmpty {
+            guard confirmRemove(T("confirm.deletePeriod"), periodLabel(p)) else { return }
+        } else {
+            NSApp.activate(ignoringOtherApps: true)
+            let a = NSAlert(); a.messageText = T("confirm.deletePeriod")
+            a.informativeText = periodLabel(p) + "\n\n" + T("period.boundTasks") + "\n" + bound.joined(separator: "\n") + "\n\n" + T("period.keepHelp")
+            a.addButton(withTitle: T("period.deleteWithTasks")); a.addButton(withTitle: T("period.keepTasks"))
+            a.addButton(withTitle: T("common.cancel")).keyEquivalent = "\u{1b}"
+            switch a.runModal() {
+            case .alertFirstButtonReturn: break
+            case .alertSecondButtonReturn: keepTasks = true
+            default: return
+            }
+        }
         periods.remove(at: i); saveJSON(periods, to: periodsURL); rebuildPeriodMenu()
-        appendLog(T("log.periodDeleted", periodLabel(p))); dropFollowers(of: p)
+        appendLog(T("log.periodDeleted", periodLabel(p))); dropFollowers(of: p, keepTasks: keepTasks)
         next = nextSlot(after: Date()); tick()
     }
 
@@ -1487,7 +1503,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     }
     // When a task runs, then what it does.
     func jobLabel(_ j: Job) -> String {
-        let names = follows(j).map(followName).joined(separator: T("common.listSeparator")), o = j.offset ?? 0
+        let names = follows(j).isEmpty ? T("job.noPeriod") : follows(j).map(followName).joined(separator: T("common.listSeparator")), o = j.offset ?? 0
         switch j.action {
         case "nudge":
             let when = ["work", "overtime"].map(followName)
@@ -1518,7 +1534,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         return T("common.paren", T("job.quietIn", s.map(followTitle).joined(separator: T("common.listSeparator"))))
     }
     func rebuildTasksMenu() {
-        fill(tasksRoot, jobs.map { (jobLabel($0) + (jobHeld($0) ? T("common.paren", T("job.heldTag")) : ""), $0.disabled == true) }, toggle: { [unowned self] i in
+        fill(tasksRoot, jobs.map { (jobLabel($0) + (jobHeld($0) ? T("common.paren", T("job.heldTag")) : jobUnbound($0) ? T("common.paren", T("job.unboundTag")) : ""), $0.disabled == true) }, toggle: { [unowned self] i in
             defer { saveJSON(jobs, to: jobsURL); jobsChanged() }; return flip(&jobs[i].disabled, jobLabel(jobs[i]))
         }, edit: { [unowned self] in editJob(jobs[$0]) }, remove: removeJob, add: (T("menu.addTask"), #selector(addJob), ""),
            test: { [unowned self] in testJob(jobs[$0]) })
@@ -1673,10 +1689,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         appendLog(T("log.taskDeleted", jobLabel(j))); jobsChanged()
     }
     // Tasks stop following a deleted period; one left following nothing is deleted.
-    func dropFollowers(of p: Period) {
+    func dropFollowers(of p: Period, keepTasks: Bool = false) {
         guard jobs.contains(where: { $0.follow?.contains(p.id) == true || $0.skip?.contains(p.id) == true }) else { return }
-        jobs.filter { $0.follow == [p.id] }.forEach { appendLog(T("log.taskDeleted", jobLabel($0))) }
-        jobs = jobs.filter { $0.follow != [p.id] }.map { var j = $0; j.follow = j.follow?.filter { $0 != p.id }
+        if !keepTasks {
+            jobs.filter { $0.follow == [p.id] }.forEach { appendLog(T("log.taskDeleted", jobLabel($0))) }
+            jobs = jobs.filter { $0.follow != [p.id] }
+        }
+        jobs = jobs.map { var j = $0; j.follow = j.follow?.filter { $0 != p.id }
             j.skip = j.skip?.filter { $0 != p.id }; if j.skip?.isEmpty == true { j.skip = nil }; return j }
         saveJSON(jobs, to: jobsURL); rebuildTasksMenu()
     }

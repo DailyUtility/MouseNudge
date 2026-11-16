@@ -233,6 +233,13 @@ check("period task: period off", due("2026-11-13 11:30").count, 0)
 check("period task: held with its period", jobHeld(jobs[0]), true)
 periods[0].disabled = nil
 check("period task: resumed with its period", jobHeld(jobs[0]), false)
+// Kept when its only period was deleted: it follows nothing, is not held, and does not run until given a time again.
+jobs = [Job(action: "notify", when: "both", follow: [])]
+check("unbound task: not held", jobHeld(jobs[0]), false)
+check("unbound task: marked", jobUnbound(jobs[0]), true)
+check("unbound task: silent at work start", due("2026-11-13 09:00").count, 0)
+check("unbound task: silent at work end", due("2026-11-13 18:00").count, 0)
+jobs = [Job(action: "notify", when: "start", follow: ["meal"])]
 periods[0].disabled = true
 periods = [Period(id: "late", from: "23:00", to: "01:00", note: "", rule: "once:2026-11-14")]
 jobs = [Job(action: "notify", when: "end", follow: ["late"])]
