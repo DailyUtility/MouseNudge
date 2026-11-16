@@ -1234,10 +1234,18 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         let rep = repeatRows(defaultIndex: 1), t = timePicker("10:00"), note = noteField()
         note.placeholderString = T("reminder.notePlaceholder")
         // Several at once from existing times: work start and end (which follow the work hours), and each period's start
-        // with its repeat, copied so a later change to the period does not move it. "Custom" adds the one in the fields below.
-        let presets: [Reminder] = [workReminder("start"), workReminder("end")]
-            + periods.filter { $0.disabled != true }.map { Reminder(at: $0.from, note: $0.note.isEmpty ? T($0.work == true ? "period.work" : "period.rest") : $0.note, rule: $0.rule) }
-        let titles = [T("reminder.presetWorkStart", workStart), T("reminder.presetWorkEnd", workEnd)] + periods.filter { $0.disabled != true }.map(periodLabel)
+        // and end as two choices with its repeat, copied so a later change to the period does not move them. "Custom" adds
+        // the one in the fields below.
+        var presets: [Reminder] = [workReminder("start"), workReminder("end")]
+        var titles = [T("reminder.presetWorkStart", workStart), T("reminder.presetWorkEnd", workEnd)]
+        for p in periods where p.disabled != true {
+            let name = p.note.isEmpty ? T(p.work == true ? "period.work" : "period.rest") : p.note
+            // A one-off running past midnight ends on the next day.
+            var endRule = p.rule
+            if overnight(p.from, p.to), let d = onceDay(p.rule).flatMap({ dayKey.date(from: $0) }) { endRule = "once:" + dayKey.string(from: d + 86400) }
+            presets += [Reminder(at: p.from, note: T("reminder.periodStart", name), rule: p.rule), Reminder(at: p.to, note: T("reminder.periodEnd", name), rule: endRule)]
+            titles += [T("reminder.presetPeriodStart", name, ruleLabel(p.rule), p.from), T("reminder.presetPeriodEnd", name, ruleLabel(p.rule), p.to)]
+        }
         let boxes = titles.map { NSButton(checkboxWithTitle: $0, target: nil, action: nil) }
         let list = NSStackView(views: boxes); list.orientation = .vertical; list.alignment = .leading; list.spacing = 4
         // Pick from existing times, or fill in a custom one; only the fields for the chosen way are shown.

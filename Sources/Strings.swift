@@ -234,6 +234,10 @@ let translations: [String: [String: String]] = [
         "edit.reminder": "编辑提醒",
         "edit.app": "编辑自动开关：%@",
         "log.itemEdited": "修改：%1$@ → %2$@",
+        "reminder.periodStart": "%@ 开始",
+        "reminder.periodEnd": "%@ 结束",
+        "reminder.presetPeriodStart": "%1$@ 开始  %2$@ %3$@",
+        "reminder.presetPeriodEnd": "%1$@ 结束  %2$@ %3$@",
     ],
     "en": [
         "week.first": "1st",
@@ -469,6 +473,10 @@ let translations: [String: [String: String]] = [
         "edit.reminder": "Edit reminder",
         "edit.app": "Edit open and quit: %@",
         "log.itemEdited": "Changed: %1$@ → %2$@",
+        "reminder.periodStart": "%@ starts",
+        "reminder.periodEnd": "%@ ends",
+        "reminder.presetPeriodStart": "%1$@ starts  %2$@ %3$@",
+        "reminder.presetPeriodEnd": "%1$@ ends  %2$@ %3$@",
     ],
     "zh-Hant": [
         "week.first": "第一個",
@@ -704,6 +712,10 @@ let translations: [String: [String: String]] = [
         "edit.reminder": "編輯提醒",
         "edit.app": "編輯自動開關：%@",
         "log.itemEdited": "修改：%1$@ → %2$@",
+        "reminder.periodStart": "%@ 開始",
+        "reminder.periodEnd": "%@ 結束",
+        "reminder.presetPeriodStart": "%1$@ 開始  %2$@ %3$@",
+        "reminder.presetPeriodEnd": "%1$@ 結束  %2$@ %3$@",
     ],
     "ja": [
         "week.first": "第1",
@@ -939,6 +951,10 @@ let translations: [String: [String: String]] = [
         "edit.reminder": "リマインダーを編集",
         "edit.app": "自動で開閉を編集：%@",
         "log.itemEdited": "変更：%1$@ → %2$@",
+        "reminder.periodStart": "%@ 開始",
+        "reminder.periodEnd": "%@ 終了",
+        "reminder.presetPeriodStart": "%1$@ 開始  %2$@ %3$@",
+        "reminder.presetPeriodEnd": "%1$@ 終了  %2$@ %3$@",
     ],
     "ko": [
         "week.first": "첫째",
@@ -1174,6 +1190,10 @@ let translations: [String: [String: String]] = [
         "edit.reminder": "알림 편집",
         "edit.app": "자동 열기/닫기 편집: %@",
         "log.itemEdited": "변경: %1$@ → %2$@",
+        "reminder.periodStart": "%@ 시작",
+        "reminder.periodEnd": "%@ 종료",
+        "reminder.presetPeriodStart": "%1$@ 시작  %2$@ %3$@",
+        "reminder.presetPeriodEnd": "%1$@ 종료  %2$@ %3$@",
     ],
     "ms": [
         "week.first": "pertama",
@@ -1409,6 +1429,10 @@ let translations: [String: [String: String]] = [
         "edit.reminder": "Edit peringatan",
         "edit.app": "Edit buka dan tutup: %@",
         "log.itemEdited": "Diubah: %1$@ → %2$@",
+        "reminder.periodStart": "%@ bermula",
+        "reminder.periodEnd": "%@ tamat",
+        "reminder.presetPeriodStart": "%1$@ bermula  %2$@ %3$@",
+        "reminder.presetPeriodEnd": "%1$@ tamat  %2$@ %3$@",
     ],
     "es": [
         "week.first": "primer",
@@ -1644,6 +1668,10 @@ let translations: [String: [String: String]] = [
         "edit.reminder": "Editar recordatorio",
         "edit.app": "Editar abrir y cerrar: %@",
         "log.itemEdited": "Cambiado: %1$@ → %2$@",
+        "reminder.periodStart": "Empieza: %@",
+        "reminder.periodEnd": "Termina: %@",
+        "reminder.presetPeriodStart": "Empieza %1$@  %2$@ %3$@",
+        "reminder.presetPeriodEnd": "Termina %1$@  %2$@ %3$@",
     ],
     "fr": [
         "week.first": "1er",
@@ -1879,6 +1907,10 @@ let translations: [String: [String: String]] = [
         "edit.reminder": "Modifier le rappel",
         "edit.app": "Modifier l'ouverture et la fermeture : %@",
         "log.itemEdited": "Modifié : %1$@ → %2$@",
+        "reminder.periodStart": "Début : %@",
+        "reminder.periodEnd": "Fin : %@",
+        "reminder.presetPeriodStart": "Début %1$@  %2$@ %3$@",
+        "reminder.presetPeriodEnd": "Fin %1$@  %2$@ %3$@",
     ],
     "de": [
         "week.first": "1.",
@@ -2114,6 +2146,10 @@ let translations: [String: [String: String]] = [
         "edit.reminder": "Erinnerung bearbeiten",
         "edit.app": "Öffnen und Beenden bearbeiten: %@",
         "log.itemEdited": "Geändert: %1$@ → %2$@",
+        "reminder.periodStart": "%@ beginnt",
+        "reminder.periodEnd": "%@ endet",
+        "reminder.presetPeriodStart": "%1$@ beginnt  %2$@ %3$@",
+        "reminder.presetPeriodEnd": "%1$@ endet  %2$@ %3$@",
     ],
 ]
 // Template order.
@@ -2351,4 +2387,8 @@ let translationKeys: [String] = [
     "edit.reminder",
     "edit.app",
     "log.itemEdited",
+    "reminder.periodStart",
+    "reminder.periodEnd",
+    "reminder.presetPeriodStart",
+    "reminder.presetPeriodEnd",
 ]
