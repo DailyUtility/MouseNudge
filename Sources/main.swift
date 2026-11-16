@@ -1582,7 +1582,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         let shown = periods.filter { $0.disabled != true || pickedFollow.contains($0.id) }
         let lunch = lunchInWork() != nil || pickedFollow.contains("lunch") ? ["lunch"] : []
         var choices: [String] = ["work"] + lunch + ["overtime"] + shown.map(\.id)
-        var titles = (["work"] + lunch + ["overtime"]).map(followName) + shown.map(periodLabel)
+        // Work hours and overtime show their times too, as lunch and the periods do; several overtimes are listed once each.
+        let otTimes = overtimes.filter { $0.disabled != true }.map(otSpanText).reduce(into: [String]()) { if !$0.contains($1) { $0.append($1) } }
+        let workTitle = followName("work") + " " + spanText(workStart, workEnd)
+        let otTitle = followName("overtime") + (otTimes.isEmpty ? "" : " " + otTimes.joined(separator: T("common.listSeparator")))
+        var titles = [workTitle] + lunch.map(followName) + [otTitle] + shown.map(periodLabel)
         for f in pickedFollow where !choices.contains(f) { choices.append(f); titles.append(T("apps.periodGone")) }
         let boxes = titles.map { NSButton(checkboxWithTitle: $0, target: nil, action: nil) }
         zip(choices, boxes).forEach { $1.state = pickedFollow.contains($0) ? .on : .off }
