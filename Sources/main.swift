@@ -409,10 +409,10 @@ struct Job: Codable, Equatable {
     var skip: [String]? = nil
 }
 var jobs: [Job] = []
-// A fresh install starts with pop-ups at the start and end of work and no nudge; it is added as a task when wanted.
+// A fresh install starts with one pop-up task at the start and end of work and no nudge; it is added as a task when wanted.
 func defaultJobs(nudging: Bool, interval: Int) -> [Job] {
     (nudging ? [Job(action: "nudge", when: "every", every: interval)] : []) +
-    [Job(action: "notify", when: "start", follow: ["work", "overtime"]), Job(action: "notify", when: "end", follow: ["work", "overtime"])]
+    [Job(action: "notify", when: "both", follow: ["work", "overtime"])]
 }
 var nudgeJob: Job? { jobs.first { $0.action == "nudge" } }
 var nudging: Bool { nudgeJob.map { $0.disabled != true } ?? false }

@@ -209,7 +209,7 @@ check("task: no end after Saturday night", due("2026-11-15 06:00").count, 0)
 reset()
 workEnd = "19:00"
 check("task: end follows the work hours", due("2026-11-13 19:00").count, 1)
-jobs[2].disabled = true
+jobs[1].disabled = true
 check("task: end turned off", due("2026-11-13 19:00").count, 0)
 reset()
 jobs = [Job(action: "notify", when: "both", follow: ["work"], offset: 10)]
