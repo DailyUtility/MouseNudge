@@ -3,7 +3,7 @@
 # Usage: ./build.sh [--universal] [--install]
 #   --universal  Apple silicon + Intel in one binary (used by make-dmg.sh)
 #   --install    copy to /Applications and (re)start it
-# Signs with the "Shiftbell Local Signing" (or the older "MouseNudge Local Signing") certificate when it exists, so the Accessibility grant survives rebuilds;
+# Signs with the "Shiftbell Local Signing" certificate when it exists, so the Accessibility grant survives rebuilds;
 # otherwise ad hoc. Set SIGN_IDENTITY to use another identity.
 set -e
 cd "$(dirname "$0")"
@@ -19,8 +19,6 @@ done
 app=build/Shiftbell.app
 rm -rf "$app"; mkdir -p "$app/Contents/MacOS" "$app/Contents/Resources"
 cp Resources/Info.plist "$app/Contents/"
-# Agent registered by an earlier build through SMAppService; kept in the bundle only so the app can unregister it.
-mkdir -p "$app/Contents/Library/LaunchAgents"; cp Resources/io.github.mar-er.mousenudge.agent.plist "$app/Contents/Library/LaunchAgents/"
 
 # The icon is drawn from the Mac's own Mouse settings icon on the building machine, so no Apple artwork is in the repo.
 if [ ! -f build/Shiftbell.icns ]; then
@@ -39,17 +37,11 @@ else
 fi
 
 identity="${SIGN_IDENTITY:-}"
-for c in "Shiftbell Local Signing" "MouseNudge Local Signing"; do
-  if [ -z "$identity" ] && security find-certificate -c "$c" >/dev/null 2>&1; then identity="$c"; fi
-done
+if [ -z "$identity" ] && security find-certificate -c "Shiftbell Local Signing" >/dev/null 2>&1; then identity="Shiftbell Local Signing"; fi
 codesign --force -s "${identity:--}" "$app"
 echo "signed: ${identity:-ad hoc}"
 
 if [ "$install" = 1 ]; then
-  # Shiftbell was called MouseNudge: stop and remove the old copy. The new one moves its settings, data and open at login over.
-  launchctl bootout "gui/$(id -u)/io.github.mar-er.mousenudge.keepalive" 2>/dev/null || true
-  pkill -x MouseNudge 2>/dev/null || true
-  rm -rf /Applications/MouseNudge.app
   # When the launch agent runs it, a plain kill counts as a crash and launchd restarts the old copy, so swap the
   # files first and let launchd restart it.
   job="gui/$(id -u)/io.github.mar-er.shiftbell.keepalive"

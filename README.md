@@ -74,7 +74,7 @@ Please use it in line with your workplace's policies.
 
 ### From the disk image
 
-1. Download `Shiftbell-<version>.dmg` from [Releases](https://github.com/DailyUtility/MouseNudge/releases) and drag Shiftbell to Applications.
+1. Download `Shiftbell-<version>.dmg` from [Releases](https://github.com/DailyUtility/Shiftbell/releases) and drag Shiftbell to Applications.
 2. The app is not notarized by Apple, so the first launch shows an "unidentified developer" or "can't be checked" warning. Either:
    - right-click Shiftbell in Applications and choose **Open**, then **Open** again, or
    - open it once, then go to **System Settings → Privacy & Security** and click **Open Anyway**.
@@ -86,8 +86,8 @@ Please use it in line with your workplace's policies.
 Needs the Xcode Command Line Tools (`xcode-select --install`).
 
 ```sh
-git clone https://github.com/DailyUtility/MouseNudge.git
-cd MouseNudge
+git clone https://github.com/DailyUtility/Shiftbell.git
+cd Shiftbell
 ./build.sh --install      # builds build/Shiftbell.app, copies it to /Applications and starts it
 ```
 
@@ -100,7 +100,7 @@ cd MouseNudge
 
 The app icon is drawn at build time from the Mac's own Mouse settings icon, so no Apple artwork is stored in this repository.
 
-**Signing.** macOS ties the Accessibility grant to the app's signature. The build is signed ad hoc by default, which means you have to grant Accessibility again after every rebuild. To avoid that, create a self-signed code signing certificate named `Shiftbell Local Signing` (or the older `MouseNudge Local Signing`) in Keychain Access (**Certificate Assistant → Create a Certificate**, type **Code Signing**). `build.sh` uses it when it exists. Set `SIGN_IDENTITY` to use another identity.
+**Signing.** macOS ties the Accessibility grant to the app's signature. The build is signed ad hoc by default, which means you have to grant Accessibility again after every rebuild. To avoid that, create a self-signed code signing certificate named `Shiftbell Local Signing` in Keychain Access (**Certificate Assistant → Create a Certificate**, type **Code Signing**). `build.sh` uses it when it exists. Set `SIGN_IDENTITY` to use another identity.
 
 ### Releases
 
