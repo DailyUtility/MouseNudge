@@ -1326,9 +1326,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     func rebuildPeriodMenu() {
         // Repeating ones first, then one-offs by date; finished one-offs are removed by pruneExpired.
         periods.sort { (onceDay($0.rule) ?? "", $0.from) < (onceDay($1.rule) ?? "", $1.from) }
-        // Each row says whether the nudge pauses in it, which is set on the nudge task.
+        // While the nudge is on, each row says whether it pauses there, which is set on the nudge task.
         let quiet = Set(nudgeJob?.skip ?? [])
-        fill(periodRoot, periods.map { (periodLabel($0) + (quiet.contains($0.id) ? T("common.paren", T("period.nudgePaused")) : ""), $0.disabled == true) }, toggle: { [unowned self] i in
+        let tag = { (p: Period) in nudging ? T("common.paren", T(quiet.contains(p.id) ? "period.nudgePaused" : "period.nudgeKept")) : "" }
+        fill(periodRoot, periods.map { (periodLabel($0) + tag($0), $0.disabled == true) }, toggle: { [unowned self] i in
             defer { saveJSON(periods, to: periodsURL); replan(); checkApps() }; return flip(&periods[i].disabled, periodLabel(periods[i]))
         }, edit: { [unowned self] in editPeriod(periods[$0]) }, remove: removePeriod, add: (T("menu.addPeriod"), #selector(addPeriod), "b"))
     }
@@ -1498,7 +1499,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     }
     // After any change to the tasks: the nudge interval and its permission, the next nudge, the apps.
     func jobsChanged() {
-        applyNudge()
+        applyNudge(); rebuildPeriodMenu()
         if nudging && !AXIsProcessTrusted() { askAccessibility() }
         replan(); checkApps()
     }

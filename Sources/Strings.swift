@@ -268,8 +268,9 @@ let translations: [String: [String: String]] = [
         "period.keepNudging": "不暂停",
         "form.skip": "暂停时段",
         "job.quietIn": "%@时暂停",
-        "period.askSkipHint": "以后可以在定时任务「挪鼠标」的「暂停时段」里修改。暂停的时段在列表里会标出「不挪鼠标」。",
+        "period.askSkipHint": "以后可以在定时任务「挪鼠标」的「暂停时段」里修改。时段列表里每个时段都会标出「挪鼠标」或「不挪鼠标」。",
         "period.nudgePaused": "不挪鼠标",
+        "period.nudgeKept": "挪鼠标",
     ],
     "en": [
         "week.first": "1st",
@@ -539,8 +540,9 @@ let translations: [String: [String: String]] = [
         "period.keepNudging": "Don't pause",
         "form.skip": "Quiet during",
         "job.quietIn": "quiet during %@",
-        "period.askSkipHint": "You can change this later under “Quiet during” in the “Nudge the mouse” task. Periods it pauses in are marked “no nudging” in the list.",
+        "period.askSkipHint": "You can change this later under “Quiet during” in the “Nudge the mouse” task. The period list marks each period “nudging” or “no nudging”.",
         "period.nudgePaused": "no nudging",
+        "period.nudgeKept": "nudging",
     ],
     "zh-Hant": [
         "week.first": "第一個",
@@ -810,8 +812,9 @@ let translations: [String: [String: String]] = [
         "period.keepNudging": "不暫停",
         "form.skip": "暫停時段",
         "job.quietIn": "%@時暫停",
-        "period.askSkipHint": "以後可以在定時任務「移動滑鼠」的「暫停時段」裡修改。暫停的時段在列表裡會標出「不移動滑鼠」。",
+        "period.askSkipHint": "以後可以在定時任務「移動滑鼠」的「暫停時段」裡修改。時段列表裡每個時段都會標出「移動滑鼠」或「不移動滑鼠」。",
         "period.nudgePaused": "不移動滑鼠",
+        "period.nudgeKept": "移動滑鼠",
     ],
     "ja": [
         "week.first": "第1",
@@ -1081,8 +1084,9 @@ let translations: [String: [String: String]] = [
         "period.keepNudging": "止めない",
         "form.skip": "止める時間帯",
         "job.quietIn": "%@は停止",
-        "period.askSkipHint": "あとでタスク「マウスを動かす」の「止める時間帯」で変更できます。止める時間帯は一覧に「移動なし」と表示されます。",
+        "period.askSkipHint": "あとでタスク「マウスを動かす」の「止める時間帯」で変更できます。一覧の各時間帯に「移動あり」か「移動なし」と表示されます。",
         "period.nudgePaused": "移動なし",
+        "period.nudgeKept": "移動あり",
     ],
     "ko": [
         "week.first": "첫째",
@@ -1352,8 +1356,9 @@ let translations: [String: [String: String]] = [
         "period.keepNudging": "멈추지 않기",
         "form.skip": "멈출 시간대",
         "job.quietIn": "%@에는 멈춤",
-        "period.askSkipHint": "나중에 '마우스 움직이기' 작업의 '멈출 시간대'에서 바꿀 수 있습니다. 멈추는 시간대는 목록에 '이동 안 함'으로 표시됩니다.",
+        "period.askSkipHint": "나중에 '마우스 움직이기' 작업의 '멈출 시간대'에서 바꿀 수 있습니다. 목록의 각 시간대에 '이동함' 또는 '이동 안 함'이 표시됩니다.",
         "period.nudgePaused": "이동 안 함",
+        "period.nudgeKept": "이동함",
     ],
     "ms": [
         "week.first": "pertama",
@@ -1623,8 +1628,9 @@ let translations: [String: [String: String]] = [
         "period.keepNudging": "Jangan hentikan",
         "form.skip": "Senyap semasa",
         "job.quietIn": "senyap semasa %@",
-        "period.askSkipHint": "Anda boleh menukarnya kemudian di bawah “Senyap semasa” dalam tugas “Gerakkan tetikus”. Tempoh yang dihentikan ditanda “tiada gerakan” dalam senarai.",
+        "period.askSkipHint": "Anda boleh menukarnya kemudian di bawah “Senyap semasa” dalam tugas “Gerakkan tetikus”. Senarai menanda setiap tempoh “ada gerakan” atau “tiada gerakan”.",
         "period.nudgePaused": "tiada gerakan",
+        "period.nudgeKept": "ada gerakan",
     ],
     "es": [
         "week.first": "primer",
@@ -1894,8 +1900,9 @@ let translations: [String: [String: String]] = [
         "period.keepNudging": "No pausar",
         "form.skip": "Pausar en",
         "job.quietIn": "en pausa durante %@",
-        "period.askSkipHint": "Puedes cambiarlo luego en “Pausar en” de la tarea “Mover el ratón”. Las franjas en pausa aparecen marcadas “sin mover” en la lista.",
+        "period.askSkipHint": "Puedes cambiarlo luego en “Pausar en” de la tarea “Mover el ratón”. La lista marca cada franja “moviendo” o “sin mover”.",
         "period.nudgePaused": "sin mover",
+        "period.nudgeKept": "moviendo",
     ],
     "fr": [
         "week.first": "1er",
@@ -2165,8 +2172,9 @@ let translations: [String: [String: String]] = [
         "period.keepNudging": "Ne pas suspendre",
         "form.skip": "Pause pendant",
         "job.quietIn": "en pause pendant %@",
-        "period.askSkipHint": "Vous pourrez le modifier plus tard sous « Pause pendant » dans la tâche « Bouger la souris ». Les créneaux en pause sont marqués « sans mouvement » dans la liste.",
+        "period.askSkipHint": "Vous pourrez le modifier plus tard sous « Pause pendant » dans la tâche « Bouger la souris ». La liste indique pour chaque créneau « avec mouvement » ou « sans mouvement ».",
         "period.nudgePaused": "sans mouvement",
+        "period.nudgeKept": "avec mouvement",
     ],
     "de": [
         "week.first": "1.",
@@ -2436,8 +2444,9 @@ let translations: [String: [String: String]] = [
         "period.keepNudging": "Nicht pausieren",
         "form.skip": "Pause in",
         "job.quietIn": "Pause in %@",
-        "period.askSkipHint": "Du kannst das später unter „Pause in“ in der Aufgabe „Maus bewegen“ ändern. Pausierte Zeitblöcke sind in der Liste mit „kein Bewegen“ markiert.",
+        "period.askSkipHint": "Du kannst das später unter „Pause in“ in der Aufgabe „Maus bewegen“ ändern. Die Liste markiert jeden Zeitblock mit „mit Bewegen“ oder „kein Bewegen“.",
         "period.nudgePaused": "kein Bewegen",
+        "period.nudgeKept": "mit Bewegen",
     ],
 ]
 // Template order.
@@ -2711,4 +2720,5 @@ let translationKeys: [String] = [
     "job.quietIn",
     "period.askSkipHint",
     "period.nudgePaused",
+    "period.nudgeKept",
 ]
