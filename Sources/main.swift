@@ -4,6 +4,7 @@ import IOKit
 import ApplicationServices
 import ServiceManagement
 import Network
+import UniformTypeIdentifiers
 
 let skipIfIdleUnder: Double = 60
 // Minutes between nudges, chosen by the person from the menu.
@@ -34,29 +35,36 @@ var holidays = HolidayCache(fetched: "", years: [], days: [:])
 let leaveURL = URL(fileURLWithPath: dir + "/leave.json")
 // Without from/to the leave covers whole days; with them, only that stretch of each day (a few hours or half a day),
 // which pauses nudging like a break and leaves the rest of the working day as usual.
-struct Leave: Codable { var start: String; var end: String; var note: String; var from: String? = nil; var to: String? = nil }
+// `disabled` (on leave, overtime, breaks and watched apps) keeps an entry in its list but leaves it out of the schedule.
+struct Leave: Codable { var start: String; var end: String; var note: String; var from: String? = nil; var to: String? = nil; var disabled: Bool? = nil }
 var leaves: [Leave] = []
 func loadLeaves() { if let d = try? Data(contentsOf: leaveURL), let l = try? JSONDecoder().decode([Leave].self, from: d) { leaves = l } }
 func saveLeaves() { let e = JSONEncoder(); e.outputFormatting = [.prettyPrinted, .sortedKeys]; try? e.encode(leaves).write(to: leaveURL) }
-func leave(on key: String) -> Leave? { leaves.first { $0.start <= key && key <= $0.end && $0.from == nil } }
-func partLeaves(on key: String) -> [Leave] { leaves.filter { $0.start <= key && key <= $0.end && $0.from != nil } }
+func leave(on key: String) -> Leave? { leaves.first { $0.disabled != true && $0.start <= key && key <= $0.end && $0.from == nil } }
+func partLeaves(on key: String) -> [Leave] { leaves.filter { $0.disabled != true && $0.start <= key && key <= $0.end && $0.from != nil } }
 
 // Overtime: on the days its `rule` picks (same rules as breaks), between these times, nudge even on weekends, holidays
 // and leave. Times are HH:mm, end exclusive. Older entries carry a start…end date range instead of a rule.
 let overtimeURL = URL(fileURLWithPath: dir + "/overtime.json")
 struct Overtime: Codable { var start: String? = nil; var end: String? = nil; var from: String; var to: String; var note: String; var rule: String?
     // A one-off ("once:") overtime may run on to `to` on this later day, all day in between.
-    var until: String? = nil }
+    var until: String? = nil; var disabled: Bool? = nil }
 var overtimes: [Overtime] = []
 // Breaks: no nudges between from and to, on working days and overtime alike. `rule` says which days:
-// nil = every day, "once:yyyy-MM-dd", "weekly:W", or "monthly:N:W" (the Nth W of the month, N = 1–4 or -1 for the last),
+// nil = every day, "once:yyyy-MM-dd", "weekly:W", "monthly:N:W" (the Nth W of the month, N = 1–5 or -1 for the last),
+// or "monthday:D" (day D of the month, or with D < 0 counted from the end: -1 is the last day; a missing day is skipped),
 // W = Calendar weekday (1 = Sunday). The older "lastweekday:W" means "monthly:-1:W".
 let breaksURL = URL(fileURLWithPath: dir + "/breaks.json")
-struct Break: Codable { var from: String; var to: String; var note: String; var rule: String? }
+struct Break: Codable { var from: String; var to: String; var note: String; var rule: String?; var disabled: Bool? = nil }
 var breaks: [Break] = []
 // Translation keys; weekday names come from the interface language (Language.swift).
-let weekOrdinals = ["week.first", "week.second", "week.third", "week.fourth"]
-func ordinalName(_ n: Int) -> String { T(n == -1 ? "week.last" : weekOrdinals[max(0, min(3, n - 1))]) }
+let weekOrdinals = ["week.first", "week.second", "week.third", "week.fourth", "week.fifth"]
+func ordinalName(_ n: Int) -> String { T(n == -1 ? "week.last" : weekOrdinals[max(0, min(4, n - 1))]) }
+func monthDayName(_ n: Int) -> String { n > 0 ? T("monthday.nth", String(n)) : n == -1 ? T("monthday.last") : T("monthday.fromEnd", String(-n)) }
+// Joins sentences: a space after Latin text, none after a full-width stop as in Chinese and Japanese.
+func sentences(_ parts: String...) -> String {
+    parts.reduce("") { a, b in a.isEmpty ? b : a + ("。！？".contains(a.last!) ? "" : " ") + b }
+}
 func breakApplies(_ b: Break, on d: Date) -> Bool { ruleApplies(b.rule, on: d) }
 func ruleApplies(_ rule: String?, on d: Date) -> Bool {
     guard let rule = rule, let colon = rule.firstIndex(of: ":") else { return true }
@@ -70,16 +78,20 @@ func ruleApplies(_ rule: String?, on d: Date) -> Bool {
         guard p.count == 2, c.component(.weekday, from: d) == p[1] else { return false }
         if p[0] == -1 { return c.component(.month, from: d + 7 * 86400) != c.component(.month, from: d) }
         return (c.component(.day, from: d) - 1) / 7 + 1 == p[0]
+    case "monthday":
+        guard let n = Int(arg) else { return false }
+        return c.component(.day, from: d) == (n > 0 ? n : c.range(of: .day, in: .month, for: d)!.count + n + 1)
     default: return true
     }
 }
-func breaksOn(_ d: Date) -> [Break] { breaks.filter { breakApplies($0, on: d) } }
+func breaksOn(_ d: Date) -> [Break] { breaks.filter { $0.disabled != true && breakApplies($0, on: d) } }
 func loadJSON<T: Decodable>(_ url: URL, into v: inout T) { if let d = try? Data(contentsOf: url), let x = try? JSONDecoder().decode(T.self, from: d) { v = x } }
 func saveJSON<T: Encodable>(_ v: T, to url: URL) { let e = JSONEncoder(); e.outputFormatting = [.prettyPrinted, .sortedKeys]; try? e.encode(v).write(to: url) }
 func onceDay(_ rule: String?) -> String? { rule?.hasPrefix("once:") == true ? String(rule!.dropFirst(5)) : nil }
 func overtime(on d: Date) -> [Overtime] {
     let k = dayKey.string(from: d)
     return overtimes.filter { o in
+        if o.disabled == true { return false }
         if let u = o.until, let s = onceDay(o.rule) { return s <= k && k <= u }
         if let s = o.start, let e = o.end { return s <= k && k <= e }
         return ruleApplies(o.rule, on: d)
@@ -191,7 +203,7 @@ enum HolidayFetchError: Error {
         case .badAddress: return T("holiday.formatHint")
         case .offline: return T("holiday.offlineText")
         case .unreachable(let detail): return T("holiday.unreachableText", detail)
-        case .notCalendar: return T("holiday.notCalendarText") + " " + T("holiday.formatHint")
+        case .notCalendar: return sentences(T("holiday.notCalendarText"), T("holiday.formatHint"))
         case .noHolidays: return T("holiday.noHolidaysText")
         }
     }
@@ -326,6 +338,67 @@ func slot(after d: Date, now: Date) -> Date {
     return t
 }
 
+// Apps kept open for the working day: opened `appLeadMinutes` before work starts, quit `appLagMinutes` after it ends
+// (each 0–240, set from the menu, default 0), and kept open through overtime. Breaks and pausing don't close them.
+let appsURL = URL(fileURLWithPath: dir + "/apps.json")
+struct WatchedApp: Codable { var name: String; var path: String; var bundleID: String?; var disabled: Bool? = nil }
+var watchedApps: [WatchedApp] = []
+var appLeadMinutes: Int = { max(0, min(240, UserDefaults.standard.integer(forKey: "appLeadMinutes"))) }()
+var appLagMinutes: Int = { max(0, min(240, UserDefaults.standard.integer(forKey: "appLagMinutes"))) }()
+func minutesOf(_ hm: String) -> Int { let p = hm.split(separator: ":").compactMap { Int($0) }; return p.count == 2 ? p[0] * 60 + p[1] : 0 }
+func hmOf(_ m: Int) -> String { String(format: "%02d:%02d", m / 60 % 24, m % 60) }
+// Opening early stops at midnight, so the stretch still belongs to its own working day; it never grows to a whole day.
+func appSpans(_ d: Date) -> [(from: String, to: String)] {
+    guard isWorkday(d) else { return [] }
+    let from = max(0, minutesOf(workStart) - appLeadMinutes)
+    let end = minutesOf(workEnd) + (overnight(workStart, workEnd) ? 1440 : 0) + appLagMinutes
+    return [(hmOf(from), hmOf(min(from + 1439, end) % 1440))]
+}
+func appsWanted(_ d: Date) -> Bool { covered(d, appSpans) || covered(d, overtimeSpans) }
+
+// Reminders: a pop-up at `at` (HH:mm) on the days `rule` picks (same rules as breaks). Repeating ones ring only on
+// working days; a one-off rings on its date whatever the day. The work start / end reminders (`work` "start" or "end")
+// are listed like the others, are there by default, and follow the work hours.
+let remindersURL = URL(fileURLWithPath: dir + "/reminders.json")
+struct Reminder: Codable { var at: String; var note: String; var rule: String?; var disabled: Bool? = nil; var work: String? = nil }
+var reminders: [Reminder] = []
+func workReminder(_ kind: String) -> Reminder { Reminder(at: kind == "start" ? workStart : workEnd, note: "", rule: nil, work: kind) }
+// Keeps the work start / end reminders on the current work hours.
+func syncWorkReminders() {
+    for i in reminders.indices { if let k = reminders[i].work { reminders[i].at = k == "start" ? workStart : workEnd } }
+}
+func reminderText(_ r: Reminder) -> String {
+    if let k = r.work { return T(k == "start" ? "reminder.workStart" : "reminder.workEnd") }
+    return r.note.isEmpty ? T("reminder.untitled", r.at) : r.note
+}
+// The texts to show at this minute. An overnight shift's end belongs to the working day it started on.
+func remindersDue(_ d: Date) -> [String] {
+    let hm = hmFmt.string(from: d)
+    var due: [String] = []
+    for r in reminders where r.disabled != true {
+        switch r.work {
+        case "start": if hm == workStart && isWorkday(d) { due.append(reminderText(r)) }
+        case "end": if hm == workEnd && isWorkday(overnight(workStart, workEnd) ? dayBefore(d) : d) { due.append(reminderText(r)) }
+        default: if r.at == hm && ruleApplies(r.rule, on: d) && (onceDay(r.rule) != nil || isWorkday(d)) { due.append(reminderText(r)) }
+        }
+    }
+    return due
+}
+
+// The nearest break start or reminder in the minutes after `d` (up to `within` seconds away), for the menu bar countdown.
+// A break only counts when it interrupts work.
+func upcomingEvent(after d: Date, within: TimeInterval) -> (at: Date, name: String)? {
+    var m = Calendar.current.dateInterval(of: .minute, for: d)!.end
+    while m.timeIntervalSince(d) <= within {
+        let hm = hmFmt.string(from: m)
+        let starting = inWindow(m - 60) ? breaksOn(m).filter { $0.from == hm }.map { $0.note.isEmpty ? T("section.breaks") : $0.note } : []
+        let names = starting + remindersDue(m)
+        if !names.isEmpty { return (m, names.joined(separator: T("common.listSeparator"))) }
+        m += 60
+    }
+    return nil
+}
+
 final class ClosureTarget: NSObject {
     let f: () -> Void
     init(_ f: @escaping () -> Void) { self.f = f }
@@ -380,6 +453,55 @@ final class SectionHeaderView: NSView {
     override func mouseEntered(with e: NSEvent) { hovered = true }
     override func mouseExited(with e: NSEvent) { hovered = false }
     override func mouseUp(with e: NSEvent) { onClick() }
+    // A button to VoiceOver and other assistive tools, which can open and close the section too.
+    override func isAccessibilityElement() -> Bool { true }
+    override func accessibilityRole() -> NSAccessibility.Role? { .button }
+    override func accessibilityPerformPress() -> Bool { onClick(); return true }
+}
+
+// An entry row: its label, then a pause/resume button that turns the entry off or on in place (the menu stays open)
+// and a delete button. A turned-off entry is greyed out.
+final class EntryRowView: NSView {
+    let label = NSTextField(labelWithString: ""), toggle = NSButton(), trash = NSButton()
+    let title: String, onToggle: () -> Bool, onDelete: () -> Void
+    var disabled: Bool { didSet { refresh() } }
+
+    init(title: String, disabled: Bool, onToggle: @escaping () -> Bool, onDelete: @escaping () -> Void) {
+        self.title = title; self.disabled = disabled; self.onToggle = onToggle; self.onDelete = onDelete
+        super.init(frame: NSRect(x: 0, y: 0, width: 240, height: 24))
+        autoresizingMask = [.width]
+        label.font = .menuFont(ofSize: 0); label.lineBreakMode = .byTruncatingTail
+        label.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
+        for (b, sel) in [(toggle, #selector(toggled)), (trash, #selector(deleted))] {
+            b.isBordered = false; b.imagePosition = .imageOnly; b.target = self; b.action = sel
+            b.symbolConfiguration = .init(pointSize: 13, weight: .regular)
+        }
+        trash.image = NSImage(systemSymbolName: "trash", accessibilityDescription: T("common.delete")); trash.toolTip = T("common.delete")
+        trash.contentTintColor = .secondaryLabelColor
+        for v in [label, toggle, trash] as [NSView] { v.translatesAutoresizingMaskIntoConstraints = false; addSubview(v) }
+        NSLayoutConstraint.activate([
+            label.leadingAnchor.constraint(equalTo: leadingAnchor, constant: 36), label.centerYAnchor.constraint(equalTo: centerYAnchor),
+            toggle.leadingAnchor.constraint(greaterThanOrEqualTo: label.trailingAnchor, constant: 10),
+            toggle.centerYAnchor.constraint(equalTo: centerYAnchor), toggle.widthAnchor.constraint(equalToConstant: 20),
+            trash.leadingAnchor.constraint(equalTo: toggle.trailingAnchor, constant: 4), trash.centerYAnchor.constraint(equalTo: centerYAnchor),
+            trash.widthAnchor.constraint(equalToConstant: 20), trash.trailingAnchor.constraint(equalTo: trailingAnchor, constant: -12),
+        ])
+        frame.size.width = max(240, label.intrinsicContentSize.width + 36 + 70)
+        refresh()
+    }
+    required init?(coder: NSCoder) { fatalError() }
+
+    func refresh() {
+        label.stringValue = title; label.textColor = disabled ? .tertiaryLabelColor : .labelColor
+        let tip = T(disabled ? "common.enable" : "common.disable")
+        toggle.image = NSImage(systemSymbolName: disabled ? "play.circle" : "pause.circle", accessibilityDescription: tip); toggle.toolTip = tip
+        toggle.contentTintColor = disabled ? .controlAccentColor : .secondaryLabelColor
+        setAccessibilityLabel(disabled ? T("item.disabledLabel", title) : title)
+        label.sizeToFit()
+        frame.size.width = max(frame.size.width, label.frame.width + 36 + 70)
+    }
+    @objc func toggled() { disabled = onToggle() }
+    @objc func deleted() { enclosingMenuItem?.menu?.cancelTracking(); DispatchQueue.main.async(execute: onDelete) }
 }
 
 final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
@@ -387,6 +509,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     let menu = NSMenu()
     // Titles are set in retitle(), again whenever the language changes.
     let lastLine = NSMenuItem(title: "", action: nil, keyEquivalent: "")
+    let nextLine = NSMenuItem(title: "", action: nil, keyEquivalent: "")
     let holidayLine = NSMenuItem(title: "", action: nil, keyEquivalent: "")
     // Today's status, one fact per line; a line is hidden when it has nothing to say.
     let todayLine = NSMenuItem(title: "", action: nil, keyEquivalent: "")
@@ -396,7 +519,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     let leaveRoot = NSMenuItem(title: "", action: nil, keyEquivalent: "")
     let overtimeRoot = NSMenuItem(title: "", action: nil, keyEquivalent: "")
     let breakRoot = NSMenuItem(title: "", action: nil, keyEquivalent: "")
-    let sectionNames = ["leave": "section.leave", "overtime": "section.overtime", "break": "section.breaks"]
+    let appsRoot = NSMenuItem(title: "", action: nil, keyEquivalent: "")
+    let reminderRoot = NSMenuItem(title: "", action: nil, keyEquivalent: "")
+    weak var openForm: NSAlert?
+    // Open reminder pop-ups with the targets of their OK buttons, kept until closed.
+    var reminderAlerts: [(NSAlert, ClosureTarget)] = []
+    var lastReminderMinute = ""
+    let appTimesItem = NSMenuItem(title: "", action: #selector(setAppTimes), keyEquivalent: "")
+    let sectionNames = ["leave": "section.leave", "overtime": "section.overtime", "break": "section.breaks", "apps": "section.apps", "reminders": "section.reminders"]
     // Sections expand in place under their heading; which ones are open survives restarts (older versions saved the Chinese names).
     var expanded = Set((UserDefaults.standard.stringArray(forKey: "expanded") ?? []).map { ["休假": "leave", "加班": "overtime", "休息时间": "break"][$0] ?? $0 })
     var sectionRows: [String: [NSMenuItem]] = [:]
@@ -426,21 +556,26 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     var online = false
     var autoFetchFailed: Date?
     var languagesWatch: DispatchSourceFileSystemObject?
+    // Watched apps are checked every few seconds. Nil until the first check, so launching after hours closes nothing.
+    var appsWereWanted: Bool?
+    var lastAppCheck = Date.distantPast
+    var appLaunchTried: [String: Date] = [:]
     let fmt: DateFormatter = { let f = DateFormatter(); f.dateFormat = "HH:mm"; return f }()
 
     func applicationDidFinishLaunching(_ n: Notification) {
         item.button?.font = .monospacedDigitSystemFont(ofSize: NSFont.systemFontSize, weight: .regular)
-        for i in [lastLine, todayLine, overtimeLine, breakLine] { i.isEnabled = false }
+        for i in [lastLine, nextLine, todayLine, overtimeLine, breakLine] { i.isEnabled = false }
         holidayLine.submenu = NSMenu(); holidayLine.submenu!.delegate = self
         loadCustomLanguages(); applyLanguageChoice(); reportLanguageProblems(); watchLanguagesFolder()
-        for i in [permLine, pauseItem, intervalItem, workHoursItem, lockItem, nowItem, refetchItem, clearSourceItem, logItem, clearLogItem, autoClearItem, loginItem, sourceItem] { i.target = self }
+        for i in [permLine, pauseItem, intervalItem, workHoursItem, lockItem, nowItem, refetchItem, clearSourceItem, logItem, clearLogItem, autoClearItem, loginItem, sourceItem, appTimesItem] { i.target = self }
         let (now, more, quit) = (nowItem, moreItem, quitItem)
         more.submenu = NSMenu(); languageItem.submenu = NSMenu(); languageItem.submenu!.delegate = self
-        loginItem.state = SMAppService.mainApp.status == .enabled ? .on : .off
+        loginItem.state = loginAgentOn ? .on : .off
         lockItem.state = nudgeWhenLocked ? .on : .off
         autoClearItem.state = autoClearLog ? .on : .off
         [loginItem, lockItem, languageItem, .separator(), sourceItem, refetchItem, clearSourceItem, .separator(), logItem, clearLogItem, autoClearItem].forEach(more.submenu!.addItem)
-        for (root, key, sym) in [(leaveRoot, "leave", "airplane"), (overtimeRoot, "overtime", "briefcase"), (breakRoot, "break", "cup.and.saucer")] {
+        appTimesItem.image = NSImage(systemSymbolName: "clock.arrow.2.circlepath", accessibilityDescription: nil)
+        for (root, key, sym) in [(leaveRoot, "leave", "airplane"), (overtimeRoot, "overtime", "briefcase"), (breakRoot, "break", "cup.and.saucer"), (reminderRoot, "reminders", "bell"), (appsRoot, "apps", "app.badge.checkmark")] {
             root.representedObject = key
             let v = SectionHeaderView(symbol: sym); v.onClick = { [weak self, weak root] in if let root { self?.toggleSection(root) } }
             root.view = v
@@ -448,13 +583,21 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         for (i, sym) in [(pauseItem, "pause.circle"), (now, "cursorarrow.motionlines"), (intervalItem, "timer"), (workHoursItem, "clock"), (more, "ellipsis.circle")] {
             i.image = NSImage(systemSymbolName: sym, accessibilityDescription: nil)
         }
-        [lastLine, holidayLine, todayLine, overtimeLine, breakLine, permLine, .separator(), pauseItem, now, .separator(), leaveRoot, overtimeRoot, breakRoot, workHoursItem, intervalItem, .separator(), more, quit].forEach(menu.addItem)
+        [lastLine, nextLine, holidayLine, todayLine, overtimeLine, breakLine, permLine, .separator(), pauseItem, now, .separator(), leaveRoot, overtimeRoot, breakRoot, reminderRoot, appsRoot, workHoursItem, intervalItem, .separator(), more, quit].forEach(menu.addItem)
         item.menu = menu
         loadHolidays()
         loadLeaves()
         loadJSON(overtimeURL, into: &overtimes)
+        loadJSON(appsURL, into: &watchedApps)
         if FileManager.default.fileExists(atPath: breaksURL.path) { loadJSON(breaksURL, into: &breaks) }
         else { breaks = [Break(from: "12:00", to: "13:00", note: T("break.lunch"), rule: nil)]; saveJSON(breaks, to: breaksURL) }
+        loadJSON(remindersURL, into: &reminders)
+        // Work start and end reminders are added once; after that they can be turned off or deleted like any other.
+        if !UserDefaults.standard.bool(forKey: "workRemindersAdded") {
+            for k in ["start", "end"] where !reminders.contains(where: { $0.work == k }) { reminders.append(workReminder(k)) }
+            saveJSON(reminders, to: remindersURL); UserDefaults.standard.set(true, forKey: "workRemindersAdded")
+            for k in ["remindWorkStart", "remindWorkEnd"] { UserDefaults.standard.removeObject(forKey: k) }
+        }
         pruneExpired()
         holidayLine.title = T("status.holidaysLoading")
         retitle()
@@ -470,7 +613,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         next = nextSlot(after: Date())
         _ = AXIsProcessTrustedWithOptions([kAXTrustedCheckOptionPrompt.takeUnretainedValue() as String: true] as CFDictionary)
         NSWorkspace.shared.notificationCenter.addObserver(self, selector: #selector(didWake), name: NSWorkspace.didWakeNotification, object: nil)
-        Timer.scheduledTimer(withTimeInterval: 1, repeats: true) { [weak self] _ in self?.tick() }.tolerance = 0.2
+        // Common modes, so the countdown in the menu keeps going while the menu is open.
+        let timer = Timer(timeInterval: 1, repeats: true) { [weak self] _ in self?.tick() }; timer.tolerance = 0.2
+        RunLoop.main.add(timer, forMode: .common)
         tick()
     }
 
@@ -487,7 +632,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         clearLogItem.title = T("menu.clearLog"); autoClearItem.title = T("menu.autoClearLog")
         lastLine.title = lastRun.map { T("status.last", $0.time, T($0.result)) } ?? T("status.lastNever")
         if fetching { holidayLine.title = T("status.holidaysFetching") }
-        rebuildLeaveMenu(); rebuildOvertimeMenu(); rebuildBreakMenu()
+        rebuildLeaveMenu(); rebuildOvertimeMenu(); rebuildBreakMenu(); rebuildReminderMenu(); rebuildAppsMenu()
         tick()
     }
 
@@ -606,11 +751,21 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         if !l.isEmpty { leaves.removeAll { over($0.end, $0.from, $0.to) }; saveLeaves(); rebuildLeaveMenu(); l.forEach { appendLog(T("log.leaveExpired", label($0))) } }
         if !o.isEmpty { overtimes.removeAll(where: otOver); saveJSON(overtimes, to: overtimeURL); rebuildOvertimeMenu(); o.forEach { appendLog(T("log.overtimeExpired", otLabel($0))) } }
         if !b.isEmpty { breaks.removeAll { over(onceDay($0.rule), $0.from, $0.to) }; saveJSON(breaks, to: breaksURL); rebuildBreakMenu(); b.forEach { appendLog(T("log.breakExpired", breakLabel($0))) } }
+        // A one-off reminder goes once its minute has passed (tick shows it before pruning).
+        let r = reminders.filter { over(onceDay($0.rule), nil, $0.at) }
+        if !r.isEmpty { reminders.removeAll { over(onceDay($0.rule), nil, $0.at) }; saveJSON(reminders, to: remindersURL); rebuildReminderMenu(); r.forEach { appendLog(T("log.reminderExpired", reminderLabel($0))) } }
     }
 
     func tick() {
         let now = Date()
+        let minute = dayKey.string(from: now) + " " + hmFmt.string(from: now)
+        if minute != lastReminderMinute {
+            lastReminderMinute = minute
+            let due = remindersDue(now)
+            if !due.isEmpty { showReminder(due); appendLog(T("log.reminderShown", due.joined(separator: T("common.listSeparator")))) }
+        }
         if hmFmt.string(from: now) != lastPrune { pruneExpired() }
+        if now.timeIntervalSince(lastAppCheck) >= 10 { checkApps() }
         permLine.isHidden = AXIsProcessTrusted()
         // With no source there is nothing to refetch or clear.
         refetchItem.isHidden = holidaySource.isEmpty; clearSourceItem.isHidden = holidaySource.isEmpty
@@ -632,7 +787,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
             breakLine.title = T("status.breaks", brText.joined(separator: T("common.listSeparator"))); breakLine.isHidden = brText.isEmpty
             // Only this year is shown, even in December; later years stay in the data for scheduling.
             let year = String(k.prefix(4))
-            let span = holidays.years.contains(Int(year)!) ? { let ks = holidays.days.keys.filter { $0.hasPrefix(year) }; return T("status.holidaysLeft", year, String(ks.filter { $0 >= k }.count), String(ks.count)) }() : holidaySource.isEmpty ? T("status.holidaysNotSubscribed") : T("status.holidaysNoData", year)
+            // Days to the next holiday after today, looking into next year's data too.
+            let untilNext = holidays.days.keys.filter { $0 > k }.min().flatMap(dayKey.date(from:)).flatMap { Calendar.current.dateComponents([.day], from: Calendar.current.startOfDay(for: now), to: $0).day }
+            let span = holidays.years.contains(Int(year)!) ? { let ks = holidays.days.keys.filter { $0.hasPrefix(year) }; return T("status.holidaysLeft", String(ks.filter { $0 >= k }.count), String(ks.count)) + (untilNext.map { T("status.holidaysNext", String($0)) } ?? "") }() : holidaySource.isEmpty ? T("status.holidaysNotSubscribed") : T("status.holidaysNoData", year)
             holidayLine.title = T("status.holidays", span)
         }
         if now >= next {
@@ -641,16 +798,57 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
             next = slot(after: next, now: now)
         }
         let left = Int(next.timeIntervalSince(now))
-        let title: String
-        if paused { title = "🖱 " + T("status.paused") }
-        else if left < 3600 { title = String(format: "🖱 %d:%02d", left / 60, left % 60) }
-        // Off hours just the icon, to keep the menu bar narrow; the next time is in the tooltip.
-        else if !inWindow(now) { title = "🖱" }
-        else if Calendar.current.isDateInToday(next) { title = "🖱 " + fmt.string(from: next) }
-        else { title = "🖱 " + localFmt("MdEEEHHmm").string(from: next) }
+        // Count down only during work hours or overtime (including the last step that runs past the end), not before work starts.
+        let counting = inWindow(now) || inWindow(next - interval)
+        let nextText: String
+        if paused { nextText = T("status.paused") }
+        else if left < 3600 && counting { nextText = T("status.nextCountdown", String(format: "%02d:%02d", left / 60, left % 60)) }
+        else if Calendar.current.isDateInToday(next) { nextText = fmt.string(from: next) }
+        else { nextText = localFmt("MdEEEHHmm").string(from: next) }
+        if nextLine.title != T("status.next", nextText) { nextLine.title = T("status.next", nextText) }
+        // The menu bar shows no clock: the icon fills from the top as the next nudge comes closer, and a countdown appears only
+        // shortly before a break or reminder.
+        setIcon(paused || !counting ? 0 : 1 - Double(left) / interval)
+        var title = paused ? T("status.paused") : ""
+        if let e = upcomingEvent(after: now, within: 600) {
+            let s = Int(e.at.timeIntervalSince(now).rounded(.up)), name = e.name.count > 8 ? e.name.prefix(7) + "…" : e.name
+            title = name + String(format: " %d:%02d", s / 60, s % 60)
+        }
+        if !title.isEmpty { title = " " + title }
         if item.button?.title != title { item.button?.title = title }
         let tip = paused ? nil : T("status.nextNudge", localFmt("MdEEEHHmm").string(from: next))
         if item.button?.toolTip != tip { item.button?.toolTip = tip }
+    }
+
+    // The 🖱 emoji, drawn once at twice the menu bar size, with the rows its drawing actually covers (the glyph box has
+    // empty space above and below). It fills from the top down as the next nudge comes closer: the filled part is the
+    // emoji as it is, the rest faded. Off hours and while paused it is faded all over.
+    lazy var mouseEmoji: (rep: NSBitmapImageRep, top: CGFloat, bottom: CGFloat) = {
+        let s = NSAttributedString(string: "🖱", attributes: [.font: NSFont.systemFont(ofSize: NSFont.systemFontSize)])
+        let size = s.size()
+        let rep = NSBitmapImageRep(bitmapDataPlanes: nil, pixelsWide: Int(ceil(size.width * 2)), pixelsHigh: Int(ceil(size.height * 2)), bitsPerSample: 8,
+                                   samplesPerPixel: 4, hasAlpha: true, isPlanar: false, colorSpaceName: .deviceRGB, bytesPerRow: 0, bitsPerPixel: 0)!
+        rep.size = size
+        NSGraphicsContext.saveGraphicsState(); NSGraphicsContext.current = NSGraphicsContext(bitmapImageRep: rep); s.draw(at: .zero); NSGraphicsContext.restoreGraphicsState()
+        let rows = (0..<rep.pixelsHigh).filter { y in (0..<rep.pixelsWide).contains { (rep.colorAt(x: $0, y: y)?.alphaComponent ?? 0) > 0.1 } }
+        let (first, last) = (rows.first ?? 0, rows.last ?? rep.pixelsHigh - 1)
+        return (rep, size.height - CGFloat(first) / 2, size.height - CGFloat(last + 1) / 2)
+    }()
+    var iconFill = -1.0
+    func setIcon(_ progress: Double) {
+        let fill = (min(max(progress, 0), 1) * 50).rounded() / 50
+        guard fill != iconFill else { return }
+        iconFill = fill
+        let e = mouseEmoji
+        let image = NSImage(size: e.rep.size, flipped: false) { r in
+            e.rep.draw(in: r, from: .zero, operation: .sourceOver, fraction: 0.3, respectFlipped: true, hints: nil)
+            let y = e.top - (e.top - e.bottom) * fill
+            NSRect(x: 0, y: y, width: r.width, height: r.height - y).clip()
+            e.rep.draw(in: r, from: .zero, operation: .sourceOver, fraction: 1, respectFlipped: true, hints: nil)
+            return true
+        }
+        image.accessibilityDescription = "MouseNudge"
+        item.button?.image = image; item.button?.imagePosition = .imageLeading
     }
 
     func run(manual: Bool) {
@@ -687,22 +885,32 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         (root.view as? SectionHeaderView)?.set(title: n == 0 ? name : T("common.withCount", name, String(n)), open: expanded.contains(key))
     }
 
-    // Rebuilds a section's rows right under its heading: one row per entry (click to delete), then the add item.
-    func fill(_ root: NSMenuItem, _ rows: [String], remove: Selector, add: (String, Selector, String)) {
+    // Rebuilds a section's rows right under its heading: one row per entry (with turn off/on and delete buttons), then the
+    // add item and any extra items. `toggle` flips entry i and returns whether it is now off; `remove` asks, then deletes.
+    func fill(_ root: NSMenuItem, _ rows: [(String, Bool)], toggle: @escaping (Int) -> Bool, remove: @escaping (Int) -> Void,
+              add: (String, Selector, String), extra: [NSMenuItem] = []) {
         let name = root.representedObject as! String
         sectionRows[name]?.forEach { if $0.menu != nil { menu.removeItem($0) } }
-        var items: [NSMenuItem] = rows.enumerated().map { i, t in
-            let it = NSMenuItem(title: t, action: remove, keyEquivalent: ""); it.target = self; it.tag = i; it.toolTip = T("menu.clickToDelete")
-            it.image = NSImage(systemSymbolName: "minus.circle", accessibilityDescription: T("common.delete")); return it
+        var items: [NSMenuItem] = rows.enumerated().map { i, r in
+            let it = NSMenuItem(title: r.0, action: nil, keyEquivalent: "")
+            it.view = EntryRowView(title: r.0, disabled: r.1, onToggle: { toggle(i) }, onDelete: { remove(i) }); return it
         }
         if rows.isEmpty { let none = NSMenuItem(title: T("menu.none"), action: nil, keyEquivalent: ""); none.isEnabled = false; items.append(none) }
         let a = NSMenuItem(title: add.0, action: add.1, keyEquivalent: add.2); a.target = self
-        a.image = NSImage(systemSymbolName: "plus.circle", accessibilityDescription: nil); items.append(a)
+        a.image = NSImage(systemSymbolName: "plus.circle", accessibilityDescription: nil); items.append(a); items += extra
         let at = menu.index(of: root) + 1
         for (i, it) in items.enumerated() { it.indentationLevel = 1; it.isHidden = !expanded.contains(name); menu.insertItem(it, at: at + i) }
         sectionRows[name] = items; sectionCount[name] = rows.count
         setHeading(root)
     }
+
+    // Turns an entry off or on, logs it and re-plans the next nudge; returns the new state.
+    func flip(_ disabled: inout Bool?, _ label: String) -> Bool {
+        let off = disabled != true; disabled = off ? true : nil
+        appendLog(T(off ? "log.itemDisabled" : "log.itemEnabled", label))
+        return off
+    }
+    func replan() { next = nextSlot(after: Date()); tick() }
 
     func toggleSection(_ sender: NSMenuItem) {
         let name = sender.representedObject as! String
@@ -715,7 +923,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     // Lists current and upcoming leave by start date; finished leave is removed by pruneExpired.
     func rebuildLeaveMenu() {
         leaves.sort { $0.start < $1.start }
-        fill(leaveRoot, leaves.map(label), remove: #selector(removeLeave(_:)), add: (T("menu.addLeave"), #selector(addLeave), "l"))
+        fill(leaveRoot, leaves.map { (label($0), $0.disabled == true) }, toggle: { [unowned self] i in
+            defer { saveLeaves(); replan() }; return flip(&leaves[i].disabled, label(leaves[i]))
+        }, remove: removeLeave, add: (T("menu.addLeave"), #selector(addLeave), "l"))
     }
 
     @objc func addLeave() {
@@ -728,16 +938,17 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         let from = datePicker(), to = datePicker(), part = NSPopUpButton(), t1 = timePicker(workStart), t2 = timePicker(mid), note = noteField()
         part.addItems(withTitles: ["leave.allDay", "leave.morning", "leave.afternoon", "leave.custom"].map { T($0) })
         note.placeholderString = T("leave.notePlaceholder")
-        // Morning / Afternoon fill in the usual half day; the times stay editable for anything other than All day.
-        let sync = ClosureTarget {
+        // Morning / Afternoon fill in the usual half day; the times show, and can be changed, for anything other than All day.
+        let sync = ClosureTarget { [unowned self] in
             let i = part.indexOfSelectedItem
             if i == 1 { t1.dateValue = hmFmt.date(from: workStart)!; t2.dateValue = hmFmt.date(from: mid)! }
             if i == 2 { t1.dateValue = hmFmt.date(from: mid)!; t2.dateValue = hmFmt.date(from: workEnd)! }
-            t1.isEnabled = i != 0; t2.isEnabled = i != 0
+            t1.isHidden = i == 0; t2.isHidden = i == 0
+            self.refitForm(part)
         }
         part.target = sync; part.action = #selector(ClosureTarget.fire); sync.fire()
         defer { withExtendedLifetime(sync) {} }
-        guard form(T("menu.addLeave"), T("leave.help") + " " + T("help.overnight"),
+        guard form(T("menu.addLeave"), sentences(T("leave.help"), T("help.overnight")),
                    [(T("form.start"), from), (T("form.end"), to), (T("form.time"), part), (T("form.from"), t1), (T("form.to"), t2), (T("form.note"), note)],
                    check: { part.indexOfSelectedItem == 0 || hmFmt.string(from: t2.dateValue) != hmFmt.string(from: t1.dateValue) ? nil : T("error.sameStartEnd") }) else { return }
         var s = dayKey.string(from: from.dateValue), e = dayKey.string(from: to.dateValue)
@@ -750,11 +961,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         next = nextSlot(after: Date()); tick()
     }
 
-    @objc func removeLeave(_ sender: NSMenuItem) {
-        guard leaves.indices.contains(sender.tag) else { return }
-        let l = leaves[sender.tag]
+    func removeLeave(_ i: Int) {
+        guard leaves.indices.contains(i) else { return }
+        let l = leaves[i]
         guard confirmRemove(T("confirm.deleteLeave"), label(l)) else { return }
-        leaves.remove(at: sender.tag); saveLeaves(); rebuildLeaveMenu()
+        leaves.remove(at: i); saveLeaves(); rebuildLeaveMenu()
         appendLog(T("log.leaveDeleted", label(l)))
         next = nextSlot(after: Date()); tick()
     }
@@ -780,9 +991,15 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         // Pickers and pop-ups all take the date picker's width; text fields keep their own.
         let w = datePicker().fittingSize.width
         for (_, v) in rows where v is NSDatePicker || v is NSPopUpButton { v.widthAnchor.constraint(equalToConstant: w).isActive = true }
+        // The grid shows every view it is given, so carry over which fields start hidden.
+        let hidden = rows.map { $0.1.isHidden }
         let grid = NSGridView(views: rows.map { [NSTextField(labelWithString: $0.0), $0.1] })
-        grid.rowSpacing = 8; grid.yPlacement = .center; grid.frame.size = grid.fittingSize
+        for (i, h) in hidden.enumerated() { rows[i].1.isHidden = h }
+        grid.rowSpacing = 8; grid.yPlacement = .center; fitRows(grid)
+        // A list's label lines up with its first item rather than its middle.
+        for (i, r) in rows.enumerated() where r.1 is NSStackView { grid.row(at: i).yPlacement = .top; grid.row(at: i).rowAlignment = .firstBaseline }
         let a = NSAlert(); a.messageText = title; a.informativeText = info
+        openForm = a
         a.accessoryView = grid; a.addButton(withTitle: button ?? T("common.add")); a.addButton(withTitle: T("common.cancel"))
         a.window.initialFirstResponder = rows.first?.1
         while a.runModal() == .alertFirstButtonReturn {
@@ -790,6 +1007,17 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
             a.informativeText = err
         }
         return false
+    }
+    // A form row shows only while its control does, so a choice can show or hide the fields that go with it.
+    func fitRows(_ grid: NSGridView) {
+        for r in 0..<grid.numberOfRows { let row = grid.row(at: r); row.isHidden = row.cell(at: 1).contentView?.isHidden ?? false }
+        // A minimum width keeps the help text above from wrapping into a tall narrow column.
+        let fit = grid.fittingSize; grid.frame.size = NSSize(width: max(fit.width, 360), height: fit.height)
+    }
+    // Call after showing or hiding controls in the open form.
+    func refitForm(_ control: NSView) {
+        guard let grid = control.superview as? NSGridView ?? control.superview?.superview as? NSGridView else { return }
+        fitRows(grid); openForm?.layout()
     }
     func confirmRemove(_ question: String, _ text: String, ok: String = T("common.delete"), keep: String = T("common.cancel")) -> Bool {
         NSApp.activate(ignoringOtherApps: true)
@@ -809,13 +1037,15 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     func rebuildOvertimeMenu() {
         // Repeating ones first, then one-offs by date; finished one-offs are removed by pruneExpired.
         overtimes.sort { ($0.start ?? onceDay($0.rule) ?? "", $0.from) < ($1.start ?? onceDay($1.rule) ?? "", $1.from) }
-        fill(overtimeRoot, overtimes.map(otLabel), remove: #selector(removeOvertime(_:)), add: (T("menu.addOvertime"), #selector(addOvertime), "o"))
+        fill(overtimeRoot, overtimes.map { (otLabel($0), $0.disabled == true) }, toggle: { [unowned self] i in
+            defer { saveJSON(overtimes, to: overtimeURL); replan() }; return flip(&overtimes[i].disabled, otLabel(overtimes[i]))
+        }, remove: removeOvertime, add: (T("menu.addOvertime"), #selector(addOvertime), "o"))
     }
     @objc func addOvertime() {
         let rep = repeatRows(defaultIndex: 1), t1 = timePicker("19:00"), t2 = timePicker("21:00"), note = noteField()
         defer { withExtendedLifetime(rep.sync) {} }
         note.placeholderString = T("overtime.notePlaceholder")
-        guard form(T("menu.addOvertime"), T("overtime.help") + " " + T("help.overnight") + " " + T("overtime.multiDayHelp"),
+        guard form(T("menu.addOvertime"), sentences(T("overtime.help"), T("help.overnight"), T("overtime.multiDayHelp")),
                    // Start and End each put the date beside the time: 11/14 09:00 → 11/15 15:00.
                    rep.rows.filter { $0.1 !== rep.day } + [(T("form.start"), pair(rep.day, t1)), (T("form.end"), pair(rep.endDay, t2)), (T("form.note"), note)],
                    check: { rep.until() != nil || hmFmt.string(from: t2.dateValue) != hmFmt.string(from: t1.dateValue) ? nil : T("error.sameStartEnd") }) else { return }
@@ -824,9 +1054,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         appendLog(T("log.overtimeAdded", otLabel(o)))
         next = nextSlot(after: Date()); tick()
     }
-    @objc func removeOvertime(_ sender: NSMenuItem) {
-        guard overtimes.indices.contains(sender.tag), confirmRemove(T("confirm.deleteOvertime"), otLabel(overtimes[sender.tag])) else { return }
-        let o = overtimes.remove(at: sender.tag); saveJSON(overtimes, to: overtimeURL); rebuildOvertimeMenu()
+    func removeOvertime(_ i: Int) {
+        guard overtimes.indices.contains(i), confirmRemove(T("confirm.deleteOvertime"), otLabel(overtimes[i])) else { return }
+        let o = overtimes.remove(at: i); saveJSON(overtimes, to: overtimeURL); rebuildOvertimeMenu()
         appendLog(T("log.overtimeDeleted", otLabel(o)))
         next = nextSlot(after: Date()); tick()
     }
@@ -841,6 +1071,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
             case "weekly": when = T("repeat.everyWeekday", wd(Int(arg)))
             case "lastweekday": when = T("repeat.monthlyNth", ordinalName(-1), wd(Int(arg)))
             case "monthly" where p.count == 2: when = T("repeat.monthlyNth", ordinalName(p[0]), wd(p[1]))
+            case "monthday" where p.count == 1: when = T("repeat.monthlyDay", monthDayName(p[0]))
             default: break
             }
         }
@@ -850,28 +1081,40 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     func rebuildBreakMenu() {
         // Repeating ones first, then one-offs by date; finished one-offs are removed by pruneExpired.
         breaks.sort { ($0.rule?.hasPrefix("once:") ?? false ? $0.rule! : "", $0.from) < ($1.rule?.hasPrefix("once:") ?? false ? $1.rule! : "", $1.from) }
-        fill(breakRoot, breaks.map(breakLabel), remove: #selector(removeBreak(_:)), add: (T("menu.addBreak"), #selector(addBreak), "b"))
+        fill(breakRoot, breaks.map { (breakLabel($0), $0.disabled == true) }, toggle: { [unowned self] i in
+            defer { saveJSON(breaks, to: breaksURL); replan() }; return flip(&breaks[i].disabled, breakLabel(breaks[i]))
+        }, remove: removeBreak, add: (T("menu.addBreak"), #selector(addBreak), "b"))
     }
     // The Repeat/Date/Week/Weekday rows shared by overtime and breaks. Keep `sync` alive while the form is open; `rule` reads the choice.
     // `endDay` is the end date field for a one-off that runs over several days; `until` reads it (nil unless after Date).
     func repeatRows(defaultIndex: Int) -> (rows: [(String, NSView)], sync: ClosureTarget, rule: () -> String?, day: NSDatePicker, endDay: NSDatePicker, until: () -> String?) {
         let repeatPop = NSPopUpButton(), ordPop = NSPopUpButton(), weekPop = NSPopUpButton(), day = datePicker(), endDay = datePicker()
+        let byPop = NSPopUpButton(), dayPop = NSPopUpButton()
         repeatPop.addItems(withTitles: ["repeat.daily", "repeat.once", "repeat.weekly", "repeat.monthly"].map { T($0) }); repeatPop.selectItem(at: defaultIndex)
-        ordPop.addItems(withTitles: weekOrdinals.map { T($0) }); ordPop.selectItem(at: 3)
+        ordPop.addItems(withTitles: (weekOrdinals + ["week.last"]).map { T($0) }); ordPop.selectItem(at: 3)
+        // Monthly goes by weekday (the Nth Friday) or by date (the 15th, the last day), since a month can have four or five weeks.
+        byPop.addItems(withTitles: [T("repeat.byWeekday"), T("repeat.byDate")])
+        let monthDays = Array(1...31) + (1...7).map { -$0 }
+        dayPop.addItems(withTitles: monthDays.map(monthDayName)); dayPop.selectItem(at: 0)
         let names = weekdayNames
         weekPop.addItems(withTitles: Array(names[1...]) + [names[0]]); weekPop.selectItem(at: 4)
-        // Only the field the chosen repeat needs is editable.
-        let sync = ClosureTarget {
+        // Only the fields the chosen repeat needs are shown.
+        let sync = ClosureTarget { [unowned self] in
             let i = repeatPop.indexOfSelectedItem
-            day.isEnabled = i == 1; endDay.isEnabled = i == 1; weekPop.isEnabled = i >= 2; ordPop.isEnabled = i == 3
+            let byDate = i == 3 && byPop.indexOfSelectedItem == 1
+            day.isHidden = i != 1; endDay.isHidden = i != 1; byPop.isHidden = i != 3
+            weekPop.isHidden = i < 2 || byDate; ordPop.isHidden = i != 3 || byDate; dayPop.isHidden = !byDate
+            self.refitForm(repeatPop)
             // The end day never comes before the start day.
             if endDay.dateValue < day.dateValue && !Calendar.current.isDate(endDay.dateValue, inSameDayAs: day.dateValue) { endDay.dateValue = day.dateValue }
         }
-        for c in [repeatPop, day, endDay] as [NSControl] { c.target = sync; c.action = #selector(ClosureTarget.fire) }
+        for c in [repeatPop, byPop, day, endDay] as [NSControl] { c.target = sync; c.action = #selector(ClosureTarget.fire) }
         sync.fire()
-        return ([(T("form.repeat"), repeatPop), (T("form.date"), day), (T("form.week"), ordPop), (T("form.weekday"), weekPop)], sync, {
-            let w = (weekPop.indexOfSelectedItem + 1) % 7 + 1, n = ordPop.indexOfSelectedItem + 1
-            return [nil, "once:" + dayKey.string(from: day.dateValue), "weekly:\(w)", "monthly:\(n):\(w)"][repeatPop.indexOfSelectedItem]
+        return ([(T("form.repeat"), repeatPop), (T("form.monthlyBy"), byPop), (T("form.date"), day), (T("form.week"), ordPop), (T("form.weekday"), weekPop),
+                 (T("form.monthDay"), dayPop)], sync, {
+            let w = (weekPop.indexOfSelectedItem + 1) % 7 + 1, n = ordPop.indexOfSelectedItem == 5 ? -1 : ordPop.indexOfSelectedItem + 1
+            let monthly = byPop.indexOfSelectedItem == 1 ? "monthday:\(monthDays[dayPop.indexOfSelectedItem])" : "monthly:\(n):\(w)"
+            return [nil, "once:" + dayKey.string(from: day.dateValue), "weekly:\(w)", monthly][repeatPop.indexOfSelectedItem]
         }, day, endDay, {
             let s = dayKey.string(from: day.dateValue), e = dayKey.string(from: endDay.dateValue)
             return repeatPop.indexOfSelectedItem == 1 && e > s ? e : nil
@@ -881,7 +1124,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         let rep = repeatRows(defaultIndex: 0), t1 = timePicker("15:00"), t2 = timePicker("16:00"), note = noteField()
         defer { withExtendedLifetime(rep.sync) {} }
         note.placeholderString = T("break.notePlaceholder")
-        guard form(T("menu.addBreak"), T("break.help") + " " + T("help.overnight"),
+        guard form(T("menu.addBreak"), sentences(T("break.help"), T("help.overnight")),
                    rep.rows + [(T("form.from"), t1), (T("form.to"), t2), (T("form.note"), note)],
                    check: { hmFmt.string(from: t2.dateValue) != hmFmt.string(from: t1.dateValue) ? nil : T("error.sameStartEnd") }) else { return }
         let b = Break(from: hmFmt.string(from: t1.dateValue), to: hmFmt.string(from: t2.dateValue), note: note.stringValue.trimmingCharacters(in: .whitespaces), rule: rep.rule())
@@ -889,11 +1132,130 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         appendLog(T("log.breakAdded", breakLabel(b)))
         next = nextSlot(after: Date()); tick()
     }
-    @objc func removeBreak(_ sender: NSMenuItem) {
-        guard breaks.indices.contains(sender.tag), confirmRemove(T("confirm.deleteBreak"), breakLabel(breaks[sender.tag])) else { return }
-        let b = breaks.remove(at: sender.tag); saveJSON(breaks, to: breaksURL); rebuildBreakMenu()
+    func removeBreak(_ i: Int) {
+        guard breaks.indices.contains(i), confirmRemove(T("confirm.deleteBreak"), breakLabel(breaks[i])) else { return }
+        let b = breaks.remove(at: i); saveJSON(breaks, to: breaksURL); rebuildBreakMenu()
         appendLog(T("log.breakDeleted", breakLabel(b)))
         next = nextSlot(after: Date()); tick()
+    }
+
+    func reminderLabel(_ r: Reminder) -> String { "\(ruleLabel(r.rule)) \(r.at)" + (r.work != nil ? "  " + reminderText(r) : r.note.isEmpty ? "" : "  " + r.note) }
+    func rebuildReminderMenu() {
+        // Repeating ones first, then one-offs by date; finished one-offs are removed by pruneExpired.
+        syncWorkReminders()
+        reminders.sort { (onceDay($0.rule) ?? "", $0.at) < (onceDay($1.rule) ?? "", $1.at) }
+        fill(reminderRoot, reminders.map { (reminderLabel($0), $0.disabled == true) }, toggle: { [unowned self] i in
+            defer { saveJSON(reminders, to: remindersURL) }; return flip(&reminders[i].disabled, reminderLabel(reminders[i]))
+        }, remove: removeReminder, add: (T("menu.addReminder"), #selector(addReminder), ""))
+    }
+    @objc func addReminder() {
+        let rep = repeatRows(defaultIndex: 1), t = timePicker("10:00"), note = noteField()
+        note.placeholderString = T("reminder.notePlaceholder")
+        // Several at once from existing times: work start and end (which follow the work hours), and each break's start
+        // with its repeat, copied so a later change to the break does not move it. "Custom" adds the one in the fields below.
+        let presets: [Reminder] = [workReminder("start"), workReminder("end")]
+            + breaks.filter { $0.disabled != true }.map { Reminder(at: $0.from, note: $0.note.isEmpty ? T("section.breaks") : $0.note, rule: $0.rule) }
+        let titles = [T("reminder.presetWorkStart", workStart), T("reminder.presetWorkEnd", workEnd)] + breaks.filter { $0.disabled != true }.map(breakLabel)
+        let boxes = titles.map { NSButton(checkboxWithTitle: $0, target: nil, action: nil) }
+        let list = NSStackView(views: boxes); list.orientation = .vertical; list.alignment = .leading; list.spacing = 4
+        // Pick from existing times, or fill in a custom one; only the fields for the chosen way are shown.
+        let mode = NSPopUpButton(); mode.addItems(withTitles: [T("reminder.fromExisting"), T("reminder.presetCustom")])
+        let custom: [NSView] = rep.rows.map(\.1) + [t, note]
+        let switchMode = ClosureTarget { [unowned self] in
+            let isCustom = mode.indexOfSelectedItem == 1
+            list.isHidden = isCustom; custom.forEach { $0.isHidden = !isCustom }
+            if isCustom { rep.sync.fire() } else { self.refitForm(mode) }
+        }
+        mode.target = switchMode; mode.action = #selector(ClosureTarget.fire); switchMode.fire()
+        defer { withExtendedLifetime((rep.sync, switchMode)) {} }
+        guard form(T("menu.addReminder"), T("reminder.help"), [(T("form.preset"), mode), (T("reminder.pick"), list)] + rep.rows + [(T("form.at"), t), (T("form.note"), note)],
+                   check: { mode.indexOfSelectedItem == 1 || boxes.contains { $0.state == .on } ? nil : T("error.pickOne") }) else { return }
+        let isCustom = mode.indexOfSelectedItem == 1
+        var added = isCustom ? [] : zip(presets, boxes).filter { $0.1.state == .on }.map(\.0)
+        if isCustom { added.append(Reminder(at: hmFmt.string(from: t.dateValue), note: note.stringValue.trimmingCharacters(in: .whitespaces), rule: rep.rule())) }
+        // One already there (same time, repeat and text) is not added twice; if it was turned off, picking it turns it back on.
+        added = added.filter { r in
+            guard let i = reminders.firstIndex(where: { r.work != nil ? $0.work == r.work : $0.work == nil && $0.at == r.at && $0.rule == r.rule && $0.note == r.note }) else { return true }
+            if reminders[i].disabled == true { reminders[i].disabled = nil; appendLog(T("log.reminderAdded", reminderLabel(reminders[i]))) }
+            return false
+        }
+        reminders += added; saveJSON(reminders, to: remindersURL); rebuildReminderMenu()
+        added.forEach { appendLog(T("log.reminderAdded", reminderLabel($0))) }
+    }
+    func removeReminder(_ i: Int) {
+        guard reminders.indices.contains(i), confirmRemove(T("confirm.deleteReminder"), reminderLabel(reminders[i])) else { return }
+        let r = reminders.remove(at: i); saveJSON(reminders, to: remindersURL); rebuildReminderMenu()
+        appendLog(T("log.reminderDeleted", reminderLabel(r)))
+    }
+    // A floating pop-up that does not block the menu bar timer; several can be open at once.
+    func showReminder(_ lines: [String]) {
+        let a = NSAlert(); a.messageText = T("reminder.title", hmFmt.string(from: Date())); a.informativeText = lines.joined(separator: "\n")
+        a.icon = NSImage(systemSymbolName: "bell.fill", accessibilityDescription: nil)
+        let ok = a.addButton(withTitle: T("common.ok"))
+        let close = ClosureTarget { [weak self, weak a] in
+            a?.window.orderOut(nil); self?.reminderAlerts.removeAll { $0.0 === a }
+        }
+        ok.target = close; ok.action = #selector(ClosureTarget.fire)
+        reminderAlerts.append((a, close))
+        a.layout(); a.window.level = .floating; a.window.center()
+        a.window.collectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary]
+        NSSound(named: "Glass")?.play()
+        NSApp.activate(ignoringOtherApps: true); a.window.makeKeyAndOrderFront(nil)
+    }
+
+    func rebuildAppsMenu() {
+        appTimesItem.title = T("menu.appTimes", String(appLeadMinutes), String(appLagMinutes))
+        fill(appsRoot, watchedApps.map { ($0.name, $0.disabled == true) }, toggle: { [unowned self] i in
+            defer { saveJSON(watchedApps, to: appsURL); checkApps() }; return flip(&watchedApps[i].disabled, watchedApps[i].name)
+        }, remove: removeApp, add: (T("menu.addApp"), #selector(addApp), ""), extra: [appTimesItem])
+    }
+    @objc func addApp() {
+        NSApp.activate(ignoringOtherApps: true)
+        let p = NSOpenPanel(); p.message = T("apps.pickHelp"); p.prompt = T("common.add")
+        p.allowedContentTypes = [.application]; p.allowsMultipleSelection = true; p.directoryURL = URL(fileURLWithPath: "/Applications")
+        guard p.runModal() == .OK else { return }
+        for url in p.urls where !watchedApps.contains(where: { $0.path == url.path }) {
+            let a = WatchedApp(name: url.deletingPathExtension().lastPathComponent, path: url.path, bundleID: Bundle(url: url)?.bundleIdentifier)
+            watchedApps.append(a); appendLog(T("log.appAdded", a.name))
+        }
+        saveJSON(watchedApps, to: appsURL); rebuildAppsMenu(); checkApps()
+    }
+    func removeApp(_ i: Int) {
+        guard watchedApps.indices.contains(i), confirmRemove(T("confirm.deleteApp"), watchedApps[i].name) else { return }
+        let a = watchedApps.remove(at: i); saveJSON(watchedApps, to: appsURL); rebuildAppsMenu()
+        appendLog(T("log.appDeleted", a.name))
+    }
+    @objc func setAppTimes() {
+        let lead = noteField(), lag = noteField()
+        lead.stringValue = String(appLeadMinutes); lag.stringValue = String(appLagMinutes)
+        func minutes(_ f: NSTextField) -> Int? { Int(f.stringValue.trimmingCharacters(in: .whitespaces)).flatMap { (0...240).contains($0) ? $0 : nil } }
+        guard form(T("appTimes.title"), T("appTimes.help"), [(T("form.openEarly"), lead), (T("form.closeLate"), lag)], button: T("common.save"),
+                   check: { minutes(lead) != nil && minutes(lag) != nil ? nil : T("appTimes.invalid") }) else { return }
+        appLeadMinutes = minutes(lead)!; appLagMinutes = minutes(lag)!
+        UserDefaults.standard.set(appLeadMinutes, forKey: "appLeadMinutes"); UserDefaults.standard.set(appLagMinutes, forKey: "appLagMinutes")
+        rebuildAppsMenu(); appendLog(T("log.appTimesChanged", String(appLeadMinutes), String(appLagMinutes)))
+        checkApps()
+    }
+    // Opens any watched app that isn't running while it is wanted (a failed launch is retried after a minute),
+    // and quits them once when the stretch ends; an app opened by hand after hours is left alone.
+    func checkApps() {
+        let now = Date(), wanted = appsWanted(now), ending = appsWereWanted == true && !wanted
+        lastAppCheck = now; appsWereWanted = wanted
+        guard wanted || ending else { return }
+        let running = NSWorkspace.shared.runningApplications
+        for a in watchedApps where a.disabled != true {
+            let mine = running.filter { $0.bundleURL?.path == a.path || (a.bundleID != nil && $0.bundleIdentifier == a.bundleID) }
+            if ending {
+                if !mine.isEmpty { mine.forEach { $0.terminate() }; appendLog(T("log.appClosed", a.name)) }
+                continue
+            }
+            guard mine.isEmpty, now.timeIntervalSince(appLaunchTried[a.path] ?? .distantPast) >= 60 else { continue }
+            appLaunchTried[a.path] = now
+            let c = NSWorkspace.OpenConfiguration(); c.activates = false; c.addsToRecentItems = false
+            NSWorkspace.shared.openApplication(at: URL(fileURLWithPath: a.path), configuration: c) { _, error in
+                DispatchQueue.main.async { appendLog(error.map { T("log.appOpenFailed", a.name, $0.localizedDescription) } ?? T("log.appOpened", a.name)) }
+            }
+        }
     }
 
     @objc func setInterval() {
@@ -915,12 +1277,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
 
     @objc func setWorkHours() {
         let t1 = timePicker(workStart), t2 = timePicker(workEnd)
-        guard form(T("workHours.title"), T("workHours.help") + " " + T("workHours.nightShiftHelp"), [(T("form.from"), t1), (T("form.to"), t2)], button: T("common.save"),
+        guard form(T("workHours.title"), sentences(T("workHours.help"), T("workHours.nightShiftHelp")), [(T("form.from"), t1), (T("form.to"), t2)], button: T("common.save"),
                    check: { hmFmt.string(from: t2.dateValue) != hmFmt.string(from: t1.dateValue) ? nil : T("error.sameStartEnd") }) else { return }
         let (s, e) = (hmFmt.string(from: t1.dateValue), hmFmt.string(from: t2.dateValue))
         UserDefaults.standard.set(s, forKey: "workStart"); UserDefaults.standard.set(e, forKey: "workEnd")
         workHoursItem.title = T("menu.workHours", s, endText(s, e))
-        appendLog(T("log.workHoursChanged", s, endText(s, e)))
+        appendLog(T("log.workHoursChanged", s, endText(s, e))); rebuildReminderMenu()
         next = nextSlot(after: Date()); tick()
     }
     @objc func toggleLocked(_ sender: NSMenuItem) {
@@ -996,12 +1358,23 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         holidays = HolidayCache(fetched: "", years: [], days: [:]); try? FileManager.default.removeItem(at: holidayURL)
         appendLog(T("log.holidayUnsubscribed")); next = nextSlot(after: Date()); tick()
     }
-    // Registers the app itself as a login item, for copies installed from the disk image.
+    // Turning it off stops the agent's copy, so when that is this one a fresh copy is opened first to take over.
     @objc func toggleLogin(_ sender: NSMenuItem) {
         do {
-            if SMAppService.mainApp.status == .enabled { try SMAppService.mainApp.unregister() } else { try SMAppService.mainApp.register() }
+            if loginAgentOn {
+                if underLoginAgent {
+                    let c = NSWorkspace.OpenConfiguration(); c.createsNewApplicationInstance = true; c.arguments = [takeoverArgument]
+                    NSWorkspace.shared.openApplication(at: Bundle.main.bundleURL, configuration: c) { _, _ in
+                        DispatchQueue.main.async { try? disableLoginAgent() }
+                    }
+                    return
+                }
+                try disableLoginAgent()
+            } else {
+                try enableLoginAgent()
+            }
         } catch { appendLog(T("log.openAtLoginFailed", error.localizedDescription)) }
-        sender.state = SMAppService.mainApp.status == .enabled ? .on : .off
+        sender.state = loginAgentOn ? .on : .off
     }
     @objc func openLog() { NSWorkspace.shared.open(logURL) }
     @objc func clearLog() {
@@ -1014,6 +1387,51 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     }
     @objc func openPrivacy() { NSWorkspace.shared.open(URL(string: "x-apple.systempreferences:com.apple.preference.security?Privacy_Accessibility")!) }
 }
+
+// Open at login is a user launch agent that runs this copy's executable by path, so it starts at login and again after a
+// crash, but not after Quit (a clean exit). A plain agent file keeps working when the app is rebuilt or updated in place,
+// unlike one registered through SMAppService, which is tied to the signature it was registered with.
+let loginAgentLabel = "io.github.mar-er.mousenudge.keepalive"
+let loginAgentURL = URL(fileURLWithPath: NSHomeDirectory() + "/Library/LaunchAgents/\(loginAgentLabel).plist")
+let underLoginAgent = ProcessInfo.processInfo.environment["XPC_SERVICE_NAME"] == loginAgentLabel
+let takeoverArgument = "--takeover"
+var loginAgentOn: Bool { FileManager.default.fileExists(atPath: loginAgentURL.path) }
+@discardableResult func launchctl(_ args: String...) -> Int32 {
+    let p = Process(); p.executableURL = URL(fileURLWithPath: "/bin/launchctl"); p.arguments = args
+    p.standardOutput = FileHandle.nullDevice; p.standardError = FileHandle.nullDevice
+    do { try p.run() } catch { return -1 }
+    p.waitUntilExit(); return p.terminationStatus
+}
+// Loading the agent starts its copy at once, which closes this one.
+func enableLoginAgent() throws {
+    let plist: [String: Any] = ["Label": loginAgentLabel, "ProgramArguments": [Bundle.main.executablePath!], "RunAtLoad": true,
+                                "KeepAlive": ["SuccessfulExit": false], "LimitLoadToSessionType": "Aqua", "ProcessType": "Interactive"]
+    try FileManager.default.createDirectory(at: loginAgentURL.deletingLastPathComponent(), withIntermediateDirectories: true)
+    try PropertyListSerialization.data(fromPropertyList: plist, format: .xml, options: 0).write(to: loginAgentURL)
+    launchctl("bootstrap", "gui/\(getuid())", loginAgentURL.path)
+}
+// Unloading stops the agent's copy, if that is the one running.
+func disableLoginAgent() throws {
+    try FileManager.default.removeItem(at: loginAgentURL)
+    launchctl("bootout", "gui/\(getuid())/\(loginAgentLabel)")
+}
+// Only one copy runs, and while open at login is on it is the launch agent's. Copies opened from Finder hand over to the
+// agent; the agent's copy closes any other. Earlier versions used a login item or an SMAppService agent; both move over.
+func claimSingleInstance() {
+    let others = NSRunningApplication.runningApplications(withBundleIdentifier: Bundle.main.bundleIdentifier ?? "")
+        .filter { $0.processIdentifier != getpid() }
+    if CommandLine.arguments.contains(takeoverArgument) { return }
+    if underLoginAgent { others.forEach { $0.terminate() }; return }
+    let legacy = SMAppService.agent(plistName: "io.github.mar-er.mousenudge.agent.plist")
+    for old in [SMAppService.mainApp, legacy] where old.status == .enabled { try? old.unregister(); if !loginAgentOn { try? enableLoginAgent() } }
+    if loginAgentOn {
+        // Not loaded yet (turned on in an older session): load it, otherwise just make sure its copy is running.
+        if launchctl("kickstart", "gui/\(getuid())/\(loginAgentLabel)") != 0 { launchctl("bootstrap", "gui/\(getuid())", loginAgentURL.path) }
+        exit(0)
+    }
+    if !others.isEmpty { exit(0) }
+}
+claimSingleInstance()
 
 let app = NSApplication.shared
 let delegate = AppDelegate()

@@ -19,6 +19,8 @@ done
 app=build/MouseNudge.app
 rm -rf "$app"; mkdir -p "$app/Contents/MacOS" "$app/Contents/Resources"
 cp Resources/Info.plist "$app/Contents/"
+# Agent registered by an earlier build through SMAppService; kept in the bundle only so the app can unregister it.
+mkdir -p "$app/Contents/Library/LaunchAgents"; cp Resources/io.github.mar-er.mousenudge.agent.plist "$app/Contents/Library/LaunchAgents/"
 
 # The icon is drawn from the Mac's own Mouse settings icon on the building machine, so no Apple artwork is in the repo.
 if [ ! -f build/MouseNudge.icns ]; then
@@ -42,10 +44,18 @@ codesign --force -s "${identity:--}" "$app"
 echo "signed: ${identity:-ad hoc}"
 
 if [ "$install" = 1 ]; then
-  pkill -x MouseNudge 2>/dev/null && sleep 1 || true
-  rm -rf /Applications/MouseNudge.app
-  cp -R "$app" /Applications/
-  open /Applications/MouseNudge.app
+  # When the launch agent runs it, a plain kill counts as a crash and launchd restarts the old copy, so swap the
+  # files first and let launchd restart it.
+  job="gui/$(id -u)/io.github.mar-er.mousenudge.keepalive"
+  if launchctl print "$job" >/dev/null 2>&1; then
+    rm -rf /Applications/MouseNudge.app; cp -R "$app" /Applications/
+    launchctl kickstart -k "$job"
+  else
+    pkill -x MouseNudge 2>/dev/null && sleep 1 || true
+    rm -rf /Applications/MouseNudge.app
+    cp -R "$app" /Applications/
+    open /Applications/MouseNudge.app
+  fi
   echo "installed: /Applications/MouseNudge.app"
 fi
 # Only the installed copy should be known to Launch Services, or the Accessibility list can pick up this one instead.

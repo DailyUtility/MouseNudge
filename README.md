@@ -9,11 +9,15 @@ A small macOS menu bar app that nudges the mouse pointer by one pixel (and back)
 - Nudges only in your work hours on working days (Monday–Friday), every N minutes (default 10, 09:00–18:00). Both are set from the menu.
 - Night shifts: a stretch like 22:00–06:00 belongs to the day it starts on.
 - Public holidays from any iCalendar subscription (`.ics` or `webcal://`, e.g. a holiday calendar from Apple Calendar or officeholidays.com). None is set by default, so only weekends are days off until you add one under **More → Subscribe to Holiday Calendar**.
-- Overtime (one day, several days in a row, or repeating), breaks (daily, weekly, Nth or last weekday of the month, one-off), and leave (whole days or part of a day).
+- Overtime (one day, several days in a row, or repeating), breaks (daily, weekly, monthly, one-off), and leave (whole days or part of a day). Monthly goes by weekday (1st to 5th or last) or by date (a day of the month, the last day, or N days from the end), for overtime, breaks and reminders alike.
+- Reminders: a pop-up at a set time, such as 10:00 stand-up or 14:00 planning (daily, weekly, monthly or one-off), plus start-of-work and end-of-work reminders, there by default, that follow your work hours and can be turned off or deleted like any other. Repeating ones ring on working days only. When adding, pick several at once from work start, work end and your breaks, or set up a custom one; the form only shows the fields that apply.
+- Each leave, overtime, break, reminder and watched app can be turned off without deleting it.
+- No clock in the menu bar: the 🖱 icon fills from the top down as the next nudge comes closer, the rest faded (faded all over off hours and while paused). A countdown appears only in the 10 minutes before a break or reminder. The countdown to the next nudge is in the menu, under the last one.
+- Keeps chosen apps open on working days: opens any that aren't running, optionally a few minutes before work starts, and quits them a set number of minutes after work ends (both default 0). They stay open through overtime and breaks.
 - Skips a nudge when you used the keyboard or mouse in the last minute, and when the screen is locked (can be turned on).
 - Run log, cleared every quarter by default or by hand.
 - Interface in English, 简体中文, 繁體中文, 日本語, 한국어, Bahasa Melayu, Español, Français and Deutsch. You can add your own language file from the Language menu.
-- Optional start at login.
+- Optional start at login; while it is on, MouseNudge also reopens itself within about 10 seconds if it crashes (Quit does not).
 
 Requires macOS 13 or later. Runs on Apple silicon and Intel.
 
@@ -28,7 +32,7 @@ Please use it in line with your workplace's policies.
    - right-click MouseNudge in Applications and choose **Open**, then **Open** again, or
    - open it once, then go to **System Settings → Privacy & Security** and click **Open Anyway**.
 3. Grant Accessibility permission when asked (**System Settings → Privacy & Security → Accessibility**, turn on MouseNudge). Moving the pointer needs it. The menu shows a warning until it is granted.
-4. To start it at login, tick **More → Open at login** in the menu.
+4. To start it at login, tick **More → Open at login, reopen after crash** in the menu.
 
 ### From source
 
@@ -65,6 +69,7 @@ Its data stays on your Mac, in `~/Library/Application Support/mouse-nudge/`:
 | --- | --- |
 | `holidays.json` | Cached holidays |
 | `leave.json`, `overtime.json`, `breaks.json` | Your leave, overtime and breaks |
+| `apps.json` | Apps opened and quit with your work hours |
 | `nudge.log` | Run log |
 | `languages/` | Your own language files |
 
@@ -103,11 +108,14 @@ MouseNudge 是一个 macOS 菜单栏小工具。在你的上班时间里，它�
 - 只在工作日（周一到周五）的上班时间挪动。间隔默认 10 分钟，时间默认 09:00–18:00，都可以在菜单里改。
 - 支持夜班：像 22:00–06:00 这样跨午夜的时段，算在开始的那一天。
 - 节假日来自任意日历订阅（`.ics` 或 `webcal://`，例如 Apple 日历里的节假日日历，或 officeholidays.com）。默认不设置，这时只排除周末；在"更多 → 订阅假期日历"里设置。
-- 支持加班（单天、连续多天、或重复）、休息（每天、每周、每月第几个或最后一个星期几、单次）和请假（整天或几个小时）。
+- 支持加班（单天、连续多天、或重复）、休息（每天、每周、每月、单次）。每月可以按星期（第一到第五个或最后一个星期几），也可以按日期（几号、最后一天或倒数第几天），加班、休息和提醒都一样和请假（整天或几个小时）。
+- 定时提醒：到点弹窗，比如 10:00 开会、14:00 需求会议（每天、每周、每月或单次），默认还有上班、下班提醒，跟着上班时间走，可以和其他提醒一样停用或删除。重复的提醒只在工作日响。添加时可以从上班、下班和休息时间里一次多选，也可以自定义；表单只显示当前选项用得到的项。
+- 请假、加班、休息、提醒和自动开关的 App 都可以单独停用，不用删除。
+- 菜单栏不显示时间：🖱 图标随着下次挪动临近从上往下慢慢填满，没填到的部分是半透明的（下班和暂停时整个半透明）。只有休息或提醒前 10 分钟才出现倒计时。下次挪动的倒计时在菜单里"上次"的下面。
 - 最近一分钟内用过键盘或鼠标时不挪动。锁屏时默认也不挪，可以在菜单里打开。
 - 有运行记录，默认每季度自动清除一次，也可以手动清除。
 - 界面支持 9 种语言，还可以在"语言"菜单里添加自己的语言文件。
-- 可以设置登录时自动启动。
+- 可以设置登录时自动启动；打开后，MouseNudge 崩溃也会在约 10 秒内自动重开（在菜单里点退出不会）。
 
 需要 macOS 13 或更高版本，支持 Apple 芯片和 Intel 芯片。
 
@@ -120,7 +128,7 @@ MouseNudge 是一个 macOS 菜单栏小工具。在你的上班时间里，它�
    - 在"应用程序"里右键点 MouseNudge，选"打开"，再点一次"打开"。
    - 先双击打开一次，然后到"系统设置 → 隐私与安全性"，点"仍要打开"。
 3. 按提示打开辅助功能权限：在"系统设置 → 隐私与安全性 → 辅助功能"里打开 MouseNudge。没有这个权限就不能移动鼠标，菜单里会一直显示提醒。
-4. 如果想开机自动运行，在菜单里勾选"更多 → 登录时自动启动"。
+4. 如果想开机自动运行，在菜单里勾选"更多 → 登录时启动，崩溃后重开"。
 
 从源码构建：先安装 Xcode 命令行工具（`xcode-select --install`），然后运行 `./build.sh --install`。
 
