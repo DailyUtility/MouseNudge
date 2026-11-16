@@ -372,6 +372,8 @@ struct Job: Codable, Equatable {
     var text: String = ""
     var name: String? = nil; var path: String? = nil; var bundleID: String? = nil; var keepOpen: Bool? = nil
     var when: String; var at: String? = nil; var rule: String? = nil
+    // A repeating "at" task that also runs on days off (weekends, holidays, leave).
+    var anyDay: Bool? = nil
     // Each "work" for work hours (with overtime), "overtime", or a period's id; nil means work hours.
     var follow: [String]? = nil; var offset: Int? = nil; var every: Int? = nil; var lead: Int? = nil; var lag: Int? = nil
 }
@@ -456,7 +458,7 @@ func jobsDue(_ d: Date) -> [(job: Job, text: String)] {
         func add(_ s: String) { if !due.contains(where: { $0.job.id == j.id && $0.text == s }) { due.append((j, j.action == "notify" ? s : j.text)) } }
         switch j.when {
         case "at":
-            if j.at == hm && ruleApplies(j.rule, on: m) && (onceDay(j.rule) != nil || isWorkday(m)) { add(j.text.isEmpty ? T("reminder.untitled", hm) : j.text) }
+            if j.at == hm && ruleApplies(j.rule, on: m) && (onceDay(j.rule) != nil || j.anyDay == true || isWorkday(m)) { add(j.text.isEmpty ? T("reminder.untitled", hm) : j.text) }
         case "every":
             let n = j.every ?? 0
             guard n > 0, minutesOf(hm) % n == 0, covered(m, { jobSpans(j, $0) }) else { continue }
@@ -1332,7 +1334,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         default: break
         }
         let edge = ["end": "End", "both": "Both"][j.when] ?? "Start"
-        let when = j.when == "at" ? "\(ruleLabel(j.rule)) \(j.at ?? "")"
+        let when = j.when == "at" ? "\(ruleLabel(j.rule)) \(j.at ?? "")" + (j.anyDay == true ? T("common.paren", T("job.anyDayTag")) : "")
             : j.when == "every" ? T("job.every", names, String(j.every ?? 0))
             : o > 0 ? T("job.before" + edge, names, String(o)) : T("job.at" + edge, names)
         let what: String
@@ -1383,6 +1385,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         let quit = NSButton(checkboxWithTitle: T("apps.autoQuit"), target: nil, action: nil), locked = NSButton(checkboxWithTitle: T("menu.nudgeWhenLocked"), target: nil, action: nil)
         quit.state = old?.keepOpen == true ? .off : .on; locked.state = nudgeWhenLocked ? .on : .off
         let rep = repeatRows(defaultIndex: 0, editing: old.map { ($0.rule, nil) }), t = timePicker(old?.at ?? "10:00")
+        let anyDay = NSButton(checkboxWithTitle: T("job.anyDay"), target: nil, action: nil); anyDay.state = old?.anyDay == true ? .on : .off
         // Any number of times can be followed. A turned-off or deleted period stays on the list while the task follows it.
         let pickedFollow = old.map(follows) ?? ["work"]
         let shown = periods.filter { $0.disabled != true || pickedFollow.contains($0.id) }
@@ -1406,9 +1409,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
             early.isHidden = !(timed && ["start", "end", "both"].contains(w))
             let at = timed && w == "at"
             t.isHidden = !at; rep.rows.forEach { $0.1.isHidden = !at }
+            // A one-off runs on its date whatever day it is.
+            anyDay.isHidden = !at || onceDay(rep.rule()) != nil
             if at { rep.sync.fire() } else { self.refitForm(actionPop) }
         }
-        for c in [actionPop, whenPop, quit] as [NSControl] { c.target = sync; c.action = #selector(ClosureTarget.fire) }
+        // The repeat choice also decides whether days off can be picked.
+        for c in [actionPop, whenPop, quit, rep.rows[0].1 as! NSControl] { c.target = sync; c.action = #selector(ClosureTarget.fire) }
         sync.fire()
         defer { withExtendedLifetime((rep.sync, sync, pickApp)) {} }
         func trimmed(_ f: NSTextField) -> String { f.stringValue.trimmingCharacters(in: .whitespaces) }
@@ -1417,7 +1423,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         guard form(T(old == nil ? "menu.addTask" : "edit.task"), T("task.help"),
                    [(T("form.action"), actionPop), (T("form.message"), message), (T("form.shortcut"), shortcut), (T("form.link"), link),
                     (T("form.command"), command), (T("form.app"), appButton), (T("form.when"), whenPop)] + rep.rows
-                   + [(T("form.at"), t), (T("form.follow"), follow), (T("form.early"), early), (T("form.every"), every), (T("form.openEarly"), lead),
+                   + [(T("form.at"), t), ("", anyDay), (T("form.follow"), follow), (T("form.early"), early), (T("form.every"), every), (T("form.openEarly"), lead),
                       (T("form.quit"), quit), (T("form.closeLate"), lag), ("", locked)],
                    button: old == nil ? nil : T("common.save"),
                    check: {
@@ -1433,6 +1439,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         var j = Job(action: a, text: textFields[a].map(trimmed) ?? "", when: timed ? whens[whenPop.indexOfSelectedItem] : a == "app" ? "during" : "every")
         if let o = old { j.id = o.id; j.disabled = o.disabled }
         if !t.isHidden { j.at = hmFmt.string(from: t.dateValue); j.rule = rep.rule() }
+        if !anyDay.isHidden && anyDay.state == .on { j.anyDay = true }
         if !follow.isHidden { j.follow = zip(choices, boxes).filter { $1.state == .on }.map(\.0) }
         if !early.isHidden { j.offset = minutes(early).flatMap { $0 > 0 ? $0 : nil } }
         if !every.isHidden { j.every = minutes(every, 1...240) }

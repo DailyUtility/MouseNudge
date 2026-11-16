@@ -106,6 +106,16 @@ check("task: one-off rings on Saturday", due("2026-11-14 14:00"), [T("reminder.u
 check("task: turned off", due("2026-11-13 11:00"), [String]())
 check("task: a link is due with its link", jobsDue(at("2026-11-13 15:00")).map(\.job.action), ["url"])
 check("task: link text", due("2026-11-13 15:00"), ["https://example.com"])
+jobs = [Job(action: "notify", text: "pills", when: "at", at: "21:00", anyDay: true), Job(action: "notify", text: "sat", when: "at", at: "09:00", rule: "weekly:7", anyDay: true)]
+check("days off: daily on Saturday", due("2026-11-14 21:00"), ["pills"])
+check("days off: daily on a workday", due("2026-11-13 21:00"), ["pills"])
+check("days off: weekly Saturday", due("2026-11-14 09:00"), ["sat"])
+holidays.days["2026-11-17"] = "Test Day"; leaves = [Leave(start: "2026-11-18", end: "2026-11-18", note: "")]
+check("days off: holiday", due("2026-11-17 21:00"), ["pills"])
+check("days off: leave", due("2026-11-18 21:00"), ["pills"])
+jobs[0].anyDay = nil
+check("days off: off by default", due("2026-11-17 21:00").count, 0)
+reset()
 jobs = defaultJobs(nudging: true, interval: 15)
 check("task: default nudge interval", nudgeJob?.every, 15)
 check("task: nudge on", nudging, true)
