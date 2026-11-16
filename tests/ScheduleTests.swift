@@ -17,7 +17,7 @@ func check<V: Equatable>(_ name: String, _ got: V, _ want: V) {
 func window(_ s: String) -> Bool { inWindow(at(s)) }
 func reset(start: String = "09:00", end: String = "18:00") {
     workStart = start; workEnd = end; intervalMinutes = 10
-    holidays = HolidayCache(fetched: "", years: [], days: [:]); leaves = []; overtimes = []; breaks = []
+    holidays = HolidayCache(fetched: "", years: [], days: [:]); leaves = []; overtimes = []; periods = []
 }
 
 // Day shift
@@ -47,9 +47,9 @@ check("holiday: morning after the night before", window("2026-11-17 03:00"), tru
 check("holiday: holiday night off", window("2026-11-17 23:00"), false)
 check("holiday: morning after the holiday night", window("2026-11-18 03:00"), false)
 
-// Breaks across midnight
+// Rest periods across midnight
 reset(start: "22:00", end: "06:00")
-breaks = [Break(from: "23:30", to: "00:30", note: "", rule: nil)]
+periods = [Period(from: "23:30", to: "00:30", note: "", rule: nil)]
 check("break: before midnight", window("2026-11-13 23:45"), false)
 check("break: after midnight", window("2026-11-14 00:15"), false)
 check("break: over", window("2026-11-14 00:45"), true)
@@ -118,7 +118,7 @@ reminders = []
 reset(start: "09:00", end: "18:00")
 
 // Menu bar: the countdown before a break or reminder
-breaks = [Break(from: "12:00", to: "13:00", note: "lunch", rule: nil)]
+periods = [Period(from: "12:00", to: "13:00", note: "lunch", rule: nil)]
 reminders = [Reminder(at: "14:00", note: "meeting", rule: nil)]
 check("event: lunch in 5 minutes", upcomingEvent(after: at("2026-11-13 11:55"), within: 600)?.name, "lunch")
 check("event: at the break start", upcomingEvent(after: at("2026-11-13 11:55"), within: 600).map { show($0.at) }, "2026-11-13 12:00")
@@ -126,33 +126,57 @@ check("event: exactly 10 minutes", upcomingEvent(after: at("2026-11-13 11:50"), 
 check("event: too far off", upcomingEvent(after: at("2026-11-13 11:49"), within: 600)?.name, nil)
 check("event: meeting", upcomingEvent(after: at("2026-11-13 13:55"), within: 600)?.name, "meeting")
 check("event: nothing on Saturday", upcomingEvent(after: at("2026-11-14 11:55"), within: 600)?.name, nil)
-reminders = []
+periods = [Period(from: "15:00", to: "16:00", note: "review", rule: nil, work: true), Period(from: "12:00", to: "13:00", note: "", rule: nil)]
+check("event: work period with a note", upcomingEvent(after: at("2026-11-13 14:55"), within: 600)?.name, "review")
+check("event: unnamed break", upcomingEvent(after: at("2026-11-13 11:55"), within: 600)?.name, T("period.rest"))
+reminders = []; periods = []
 reset()
 
-// Log quarters
-// Apps kept open: work hours widened by the lead and lag, plus overtime
+// Work periods count as work time, on working days only
 reset()
-appLeadMinutes = 0; appLagMinutes = 0
-check("apps: before work", appsWanted(at("2026-11-13 08:59")), false)
-check("apps: work hours", appsWanted(at("2026-11-13 09:00")), true)
-check("apps: closed at the end", appsWanted(at("2026-11-13 18:00")), false)
-appLeadMinutes = 30; appLagMinutes = 15
-check("apps: open early", appsWanted(at("2026-11-13 08:30")), true)
-check("apps: not too early", appsWanted(at("2026-11-13 08:29")), false)
-check("apps: quit late", appsWanted(at("2026-11-13 18:14")), true)
-check("apps: quit after the lag", appsWanted(at("2026-11-13 18:15")), false)
-check("apps: Saturday off", appsWanted(at("2026-11-14 10:00")), false)
+periods = [Period(from: "19:00", to: "20:00", note: "", rule: nil, work: true)]
+check("work period: after hours", window("2026-11-13 19:30"), true)
+check("work period: not on Saturday", window("2026-11-14 19:30"), false)
+check("work period: next start", show(nextStart(after: at("2026-11-13 18:30"))), "2026-11-13 19:00")
+check("work period: not a break", breaksOn(at("2026-11-13 12:00")).count, 0)
+periods = [Period(from: "10:00", to: "11:00", note: "", rule: "once:2026-11-14", work: true)]
+check("work period: one-off on Saturday", window("2026-11-14 10:30"), true)
+periods = []
+
+// Apps follow work hours (with overtime), overtime only, or a period, widened by lead and lag
+reset()
+var app = WatchedApp(name: "A", path: "/A.app")
+check("apps: before work", appWanted(app, at("2026-11-13 08:59")), false)
+check("apps: work hours", appWanted(app, at("2026-11-13 09:00")), true)
+check("apps: closed at the end", appWanted(app, at("2026-11-13 18:00")), false)
+app.lead = 30; app.lag = 15
+check("apps: open early", appWanted(app, at("2026-11-13 08:30")), true)
+check("apps: not too early", appWanted(app, at("2026-11-13 08:29")), false)
+check("apps: quit late", appWanted(app, at("2026-11-13 18:14")), true)
+check("apps: quit after the lag", appWanted(app, at("2026-11-13 18:15")), false)
+check("apps: Saturday off", appWanted(app, at("2026-11-14 10:00")), false)
 overtimes = [Overtime(from: "10:00", to: "12:00", note: "", rule: "once:2026-11-14")]
-check("apps: Saturday overtime", appsWanted(at("2026-11-14 11:00")), true)
+check("apps: Saturday overtime", appWanted(app, at("2026-11-14 11:00")), true)
+var ot = WatchedApp(name: "B", path: "/B.app", follows: "overtime")
+check("apps: overtime only", appWanted(ot, at("2026-11-14 11:00")), true)
+check("apps: overtime only skips work hours", appWanted(ot, at("2026-11-13 10:00")), false)
+ot.disabled = true
+check("apps: turned off", appWanted(ot, at("2026-11-14 11:00")), false)
+overtimes = []
+periods = [Period(id: "m", from: "14:00", to: "15:00", note: "", rule: nil, work: true)]
+let meet = WatchedApp(name: "C", path: "/C.app", follows: "m", lead: 5, lag: 0)
+check("apps: period lead", appWanted(meet, at("2026-11-13 13:55")), true)
+check("apps: period over", appWanted(meet, at("2026-11-13 15:00")), false)
+check("apps: deleted period", appWanted(WatchedApp(name: "D", path: "/D.app", follows: "gone"), at("2026-11-13 14:30")), false)
+periods = []
 reset(start: "01:00", end: "06:00")
-appLeadMinutes = 120; appLagMinutes = 0
-check("apps: early opening stops at midnight", appsWanted(at("2026-11-13 00:30")), true)
-check("apps: no wrap into the night before", appsWanted(at("2026-11-12 23:30")), false)
+app = WatchedApp(name: "A", path: "/A.app", lead: 120, lag: 0)
+check("apps: early opening stops at midnight", appWanted(app, at("2026-11-13 00:30")), true)
+check("apps: no wrap into the night before", appWanted(app, at("2026-11-12 23:30")), false)
 reset(start: "22:00", end: "06:00")
-appLeadMinutes = 0; appLagMinutes = 60
-check("apps: night shift lag", appsWanted(at("2026-11-14 06:30")), true)
-check("apps: night shift over", appsWanted(at("2026-11-14 07:00")), false)
-appLeadMinutes = 0; appLagMinutes = 0
+app = WatchedApp(name: "A", path: "/A.app", lead: 0, lag: 60)
+check("apps: night shift lag", appWanted(app, at("2026-11-14 06:30")), true)
+check("apps: night shift over", appWanted(app, at("2026-11-14 07:00")), false)
 
 // Turned-off entries stay listed but are left out of the schedule
 reset(start: "09:00", end: "18:00")
@@ -160,12 +184,13 @@ leaves = [Leave(start: "2026-11-13", end: "2026-11-13", note: "", disabled: true
 check("off: whole-day leave ignored", leave(on: "2026-11-13") == nil, true)
 check("off: part leave ignored", partLeaves(on: "2026-11-13").count, 0)
 leaves = []
-breaks = [Break(from: "15:00", to: "16:00", note: "", rule: nil, disabled: true)]
+periods = [Period(from: "15:00", to: "16:00", note: "", rule: nil, disabled: true), Period(from: "19:00", to: "20:00", note: "", rule: nil, disabled: true, work: true)]
 check("off: break ignored", breaksOn(at("2026-11-13 12:00")).count, 0)
-breaks = []
+check("off: work period ignored", window("2026-11-13 19:30"), false)
+periods = []
 overtimes = [Overtime(from: "10:00", to: "12:00", note: "", rule: "once:2026-11-14", disabled: true)]
 check("off: overtime ignored", overtime(on: at("2026-11-14 11:00")).count, 0)
-check("off: no Saturday apps", appsWanted(at("2026-11-14 11:00")), false)
+check("off: no Saturday apps", appWanted(WatchedApp(name: "A", path: "/A.app"), at("2026-11-14 11:00")), false)
 overtimes = []
 
 // Log quarters

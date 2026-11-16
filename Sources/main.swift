@@ -1,4 +1,4 @@
-// Shiftbell, a menu bar work-time keeper; its mouse nudge runs on working days (Monday–Friday, minus public holidays from an optional calendar subscription) during work hours (set from the menu, default 09:00–18:00) plus any overtime (one day or repeating), minus breaks (daily, weekly, last weekday of the month or one-off), every N minutes (set from the menu, default 10), last nudge at the first step past the end; skips when the screen is locked (unless allowed) or the person used any input device in the last minute.
+// Shiftbell, a menu bar work-time keeper; its mouse nudge runs on working days (Monday–Friday, minus public holidays from an optional calendar subscription) during work hours (set from the menu, default 09:00–18:00) plus any overtime (one day or repeating), minus rest periods, plus work periods (daily, weekly, monthly or one-off), every N minutes (set from the menu, default 10), last nudge at the first step past the end; skips when the screen is locked (unless allowed) or the person used any input device in the last minute.
 import Cocoa
 import IOKit
 import ApplicationServices
@@ -49,7 +49,7 @@ var holidays = HolidayCache(fetched: "", years: [], days: [:])
 let leaveURL = URL(fileURLWithPath: dir + "/leave.json")
 // Without from/to the leave covers whole days; with them, only that stretch of each day (a few hours or half a day),
 // which pauses nudging like a break and leaves the rest of the working day as usual.
-// `disabled` (on leave, overtime, breaks and watched apps) keeps an entry in its list but leaves it out of the schedule.
+// `disabled` (on leave, overtime, periods and watched apps) keeps an entry in its list but leaves it out of the schedule.
 struct Leave: Codable { var start: String; var end: String; var note: String; var from: String? = nil; var to: String? = nil; var disabled: Bool? = nil }
 var leaves: [Leave] = []
 func loadLeaves() { if let d = try? Data(contentsOf: leaveURL), let l = try? JSONDecoder().decode([Leave].self, from: d) { leaves = l } }
@@ -57,20 +57,21 @@ func saveLeaves() { let e = JSONEncoder(); e.outputFormatting = [.prettyPrinted,
 func leave(on key: String) -> Leave? { leaves.first { $0.disabled != true && $0.start <= key && key <= $0.end && $0.from == nil } }
 func partLeaves(on key: String) -> [Leave] { leaves.filter { $0.disabled != true && $0.start <= key && key <= $0.end && $0.from != nil } }
 
-// Overtime: on the days its `rule` picks (same rules as breaks), between these times, nudge even on weekends, holidays
+// Overtime: on the days its `rule` picks (same rules as periods), between these times, nudge even on weekends, holidays
 // and leave. Times are HH:mm, end exclusive. Older entries carry a start…end date range instead of a rule.
 let overtimeURL = URL(fileURLWithPath: dir + "/overtime.json")
 struct Overtime: Codable { var start: String? = nil; var end: String? = nil; var from: String; var to: String; var note: String; var rule: String?
     // A one-off ("once:") overtime may run on to `to` on this later day, all day in between.
     var until: String? = nil; var disabled: Bool? = nil }
 var overtimes: [Overtime] = []
-// Breaks: no nudges between from and to, on working days and overtime alike. `rule` says which days:
-// nil = every day, "once:yyyy-MM-dd", "weekly:W", "monthly:N:W" (the Nth W of the month, N = 1–5 or -1 for the last),
+// Periods: stretches of the day, on the days `rule` picks. A rest period (lunch, a tea break) pauses nudging, on working
+// days and overtime alike; a work period (a meeting, focus time) counts as work time. `rule` says which days: nil = every day, "once:yyyy-MM-dd", "weekly:W", "monthly:N:W" (the Nth W of the month, N = 1–5 or -1 for the last),
 // or "monthday:D" (day D of the month, or with D < 0 counted from the end: -1 is the last day; a missing day is skipped),
 // W = Calendar weekday (1 = Sunday). The older "lastweekday:W" means "monthly:-1:W".
-let breaksURL = URL(fileURLWithPath: dir + "/breaks.json")
-struct Break: Codable { var from: String; var to: String; var note: String; var rule: String?; var disabled: Bool? = nil }
-var breaks: [Break] = []
+let periodsURL = URL(fileURLWithPath: dir + "/periods.json")
+// `id` is what an app following the period refers to; `work` is true for a work period.
+struct Period: Codable { var id = UUID().uuidString; var from: String; var to: String; var note: String; var rule: String?; var disabled: Bool? = nil; var work: Bool? = nil }
+var periods: [Period] = []
 // Translation keys; weekday names come from the interface language (Language.swift).
 let weekOrdinals = ["week.first", "week.second", "week.third", "week.fourth", "week.fifth"]
 func ordinalName(_ n: Int) -> String { T(n == -1 ? "week.last" : weekOrdinals[max(0, min(4, n - 1))]) }
@@ -79,7 +80,6 @@ func monthDayName(_ n: Int) -> String { n > 0 ? T("monthday.nth", String(n)) : n
 func sentences(_ parts: String...) -> String {
     parts.reduce("") { a, b in a.isEmpty ? b : a + ("。！？".contains(a.last!) ? "" : " ") + b }
 }
-func breakApplies(_ b: Break, on d: Date) -> Bool { ruleApplies(b.rule, on: d) }
 func ruleApplies(_ rule: String?, on d: Date) -> Bool {
     guard let rule = rule, let colon = rule.firstIndex(of: ":") else { return true }
     let kind = rule[..<colon], arg = String(rule[rule.index(after: colon)...]), c = Calendar.current
@@ -98,7 +98,13 @@ func ruleApplies(_ rule: String?, on d: Date) -> Bool {
     default: return true
     }
 }
-func breaksOn(_ d: Date) -> [Break] { breaks.filter { $0.disabled != true && breakApplies($0, on: d) } }
+// Rest periods, which apply every day the rule picks.
+func breaksOn(_ d: Date) -> [Period] { periods.filter { $0.disabled != true && $0.work != true && ruleApplies($0.rule, on: d) } }
+// A period as work time or for an app: a repeating one counts on working days only, a one-off on its own day.
+func periodSpans(_ p: Period, _ d: Date) -> [(from: String, to: String)] {
+    p.disabled != true && ruleApplies(p.rule, on: d) && (onceDay(p.rule) != nil || isWorkday(d)) ? [(p.from, p.to)] : []
+}
+func workPeriodSpans(_ d: Date) -> [(from: String, to: String)] { periods.filter { $0.work == true }.flatMap { periodSpans($0, d) } }
 func loadJSON<T: Decodable>(_ url: URL, into v: inout T) { if let d = try? Data(contentsOf: url), let x = try? JSONDecoder().decode(T.self, from: d) { v = x } }
 func saveJSON<T: Encodable>(_ v: T, to url: URL) { let e = JSONEncoder(); e.outputFormatting = [.prettyPrinted, .sortedKeys]; try? e.encode(v).write(to: url) }
 func onceDay(_ rule: String?) -> String? { rule?.hasPrefix("once:") == true ? String(rule!.dropFirst(5)) : nil }
@@ -279,7 +285,7 @@ func isWorkday(_ d: Date) -> Bool {
 
 let hmFmt: DateFormatter = { let f = DateFormatter(); f.locale = Locale(identifier: "en_US_POSIX"); f.dateFormat = "HH:mm"; return f }()
 
-// Breaks plus part-day leave: no nudges in these stretches.
+// Rest periods plus part-day leave: no nudges in these stretches.
 func pausesOn(_ d: Date) -> [(from: String, to: String)] {
     breaksOn(d).map { ($0.from, $0.to) } + partLeaves(on: dayKey.string(from: d)).map { ($0.from!, $0.to!) }
 }
@@ -311,16 +317,16 @@ func workSpans(_ d: Date) -> [(from: String, to: String)] { isWorkday(d) ? [(wor
 
 func inWindow(_ d: Date) -> Bool {
     if inBreak(d) { return false }
-    return covered(d, overtimeSpans) || covered(d, workSpans)
+    return covered(d, overtimeSpans) || covered(d, workSpans) || covered(d, workPeriodSpans)
 }
 
-// The first moment after `d` when nudging may start again: the start of work hours on a working day, an overtime start, or a break end.
+// The first moment after `d` when nudging may start again: the start of work hours on a working day, an overtime or work period start, or a break end.
 func nextStart(after d: Date) -> Date {
     let c = Calendar.current
     for offset in 0..<400 {
         let day = c.date(byAdding: .day, value: offset, to: c.startOfDay(for: d))!
         // Break ends today include those of last night's breaks that run past midnight.
-        var marks = overtimeSpans(day).map(\.from) + (pausesOn(day) + pausesOn(dayBefore(day))).map(\.to)
+        var marks = (overtimeSpans(day) + workPeriodSpans(day)).map(\.from) + (pausesOn(day) + pausesOn(dayBefore(day))).map(\.to)
         if isWorkday(day) { marks.append(workStart) }
         for m in Set(marks).sorted() {
             let p = m.split(separator: ":").compactMap { Int($0) }
@@ -352,25 +358,36 @@ func slot(after d: Date, now: Date) -> Date {
     return t
 }
 
-// Apps kept open for the working day: opened `appLeadMinutes` before work starts, quit `appLagMinutes` after it ends
-// (each 0–240, set from the menu, default 0), and kept open through overtime. Breaks and pausing don't close them.
+// Apps opened for a stretch of time and quit after it. Each follows work hours (with overtime), overtime alone or a
+// period: opened `lead` minutes before it starts and quit `lag` minutes after it ends (each 0–240, default 0), or, with
+// `keepOpen`, never quit. Breaks and pausing don't close an app that follows work hours.
 let appsURL = URL(fileURLWithPath: dir + "/apps.json")
-struct WatchedApp: Codable { var name: String; var path: String; var bundleID: String?; var disabled: Bool? = nil }
+struct WatchedApp: Codable { var name: String; var path: String; var bundleID: String?; var disabled: Bool? = nil
+    // "work" (or nil) for work hours, "overtime", or a period's id.
+    var follows: String? = nil; var lead: Int? = nil; var lag: Int? = nil; var keepOpen: Bool? = nil }
 var watchedApps: [WatchedApp] = []
-var appLeadMinutes: Int = { max(0, min(240, UserDefaults.standard.integer(forKey: "appLeadMinutes"))) }()
-var appLagMinutes: Int = { max(0, min(240, UserDefaults.standard.integer(forKey: "appLagMinutes"))) }()
 func minutesOf(_ hm: String) -> Int { let p = hm.split(separator: ":").compactMap { Int($0) }; return p.count == 2 ? p[0] * 60 + p[1] : 0 }
 func hmOf(_ m: Int) -> String { String(format: "%02d:%02d", m / 60 % 24, m % 60) }
-// Opening early stops at midnight, so the stretch still belongs to its own working day; it never grows to a whole day.
-func appSpans(_ d: Date) -> [(from: String, to: String)] {
-    guard isWorkday(d) else { return [] }
-    let from = max(0, minutesOf(workStart) - appLeadMinutes)
-    let end = minutesOf(workEnd) + (overnight(workStart, workEnd) ? 1440 : 0) + appLagMinutes
-    return [(hmOf(from), hmOf(min(from + 1439, end) % 1440))]
+// Opening early stops at midnight, so the stretch still belongs to its own day; it never grows to a whole day.
+// A stretch that runs to midnight (a day inside overtime over several days) is not stretched past it.
+func widened(_ s: (from: String, to: String), lead: Int, lag: Int) -> (from: String, to: String) {
+    let from = max(0, minutesOf(s.from) - lead)
+    if s.to == "24:00" { return (hmOf(from), s.to) }
+    let end = minutesOf(s.to) + (overnight(s.from, s.to) ? 1440 : 0) + lag
+    return (hmOf(from), hmOf(min(from + 1439, end) % 1440))
 }
-func appsWanted(_ d: Date) -> Bool { covered(d, appSpans) || covered(d, overtimeSpans) }
+func appSpans(_ a: WatchedApp, _ d: Date) -> [(from: String, to: String)] {
+    let spans: [(from: String, to: String)]
+    switch a.follows ?? "work" {
+    case "work": spans = workSpans(d) + overtimeSpans(d)
+    case "overtime": spans = overtimeSpans(d)
+    case let id: spans = periods.first { $0.id == id }.map { periodSpans($0, d) } ?? []
+    }
+    return spans.map { widened($0, lead: a.lead ?? 0, lag: a.lag ?? 0) }
+}
+func appWanted(_ a: WatchedApp, _ d: Date) -> Bool { a.disabled != true && covered(d) { appSpans(a, $0) } }
 
-// Reminders: a pop-up at `at` (HH:mm) on the days `rule` picks (same rules as breaks). Repeating ones ring only on
+// Reminders: a pop-up at `at` (HH:mm) on the days `rule` picks (same rules as periods). Repeating ones ring only on
 // working days; a one-off rings on its date whatever the day. The work start / end reminders (`work` "start" or "end")
 // are listed like the others, are there by default, and follow the work hours.
 let remindersURL = URL(fileURLWithPath: dir + "/reminders.json")
@@ -399,13 +416,14 @@ func remindersDue(_ d: Date) -> [String] {
     return due
 }
 
-// The nearest break start or reminder in the minutes after `d` (up to `within` seconds away), for the menu bar countdown.
-// A break only counts when it interrupts work.
+// The nearest break start, named work period start or reminder in the minutes after `d` (up to `within` seconds away),
+// for the menu bar countdown. A break only counts when it interrupts work.
 func upcomingEvent(after d: Date, within: TimeInterval) -> (at: Date, name: String)? {
     var m = Calendar.current.dateInterval(of: .minute, for: d)!.end
     while m.timeIntervalSince(d) <= within {
         let hm = hmFmt.string(from: m)
-        let starting = inWindow(m - 60) ? breaksOn(m).filter { $0.from == hm }.map { $0.note.isEmpty ? T("section.breaks") : $0.note } : []
+        let starting = (inWindow(m - 60) ? breaksOn(m).filter { $0.from == hm }.map { $0.note.isEmpty ? T("period.rest") : $0.note } : [])
+            + periods.filter { $0.work == true && !$0.note.isEmpty && $0.from == hm && !periodSpans($0, m).isEmpty }.map(\.note)
         let names = starting + remindersDue(m)
         if !names.isEmpty { return (m, names.joined(separator: T("common.listSeparator"))) }
         m += 60
@@ -532,17 +550,16 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     let permLine = NSMenuItem(title: "", action: #selector(openPrivacy), keyEquivalent: "")
     let leaveRoot = NSMenuItem(title: "", action: nil, keyEquivalent: "")
     let overtimeRoot = NSMenuItem(title: "", action: nil, keyEquivalent: "")
-    let breakRoot = NSMenuItem(title: "", action: nil, keyEquivalent: "")
+    let periodRoot = NSMenuItem(title: "", action: nil, keyEquivalent: "")
     let appsRoot = NSMenuItem(title: "", action: nil, keyEquivalent: "")
     let reminderRoot = NSMenuItem(title: "", action: nil, keyEquivalent: "")
     weak var openForm: NSAlert?
     // Open reminder pop-ups with the targets of their OK buttons, kept until closed.
     var reminderAlerts: [(NSAlert, ClosureTarget)] = []
     var lastReminderMinute = ""
-    let appTimesItem = NSMenuItem(title: "", action: #selector(setAppTimes), keyEquivalent: "")
-    let sectionNames = ["leave": "section.leave", "overtime": "section.overtime", "break": "section.breaks", "apps": "section.apps", "reminders": "section.reminders"]
+    let sectionNames = ["leave": "section.leave", "overtime": "section.overtime", "periods": "section.periods", "apps": "section.apps", "reminders": "section.reminders"]
     // Sections expand in place under their heading; which ones are open survives restarts (older versions saved the Chinese names).
-    var expanded = Set((UserDefaults.standard.stringArray(forKey: "expanded") ?? []).map { ["休假": "leave", "加班": "overtime", "休息时间": "break"][$0] ?? $0 })
+    var expanded = Set((UserDefaults.standard.stringArray(forKey: "expanded") ?? []).map { ["休假": "leave", "加班": "overtime", "休息时间": "periods", "break": "periods"][$0] ?? $0 })
     var sectionRows: [String: [NSMenuItem]] = [:]
     var sectionCount: [String: Int] = [:]
     let pauseItem = NSMenuItem(title: "", action: #selector(togglePause), keyEquivalent: "p")
@@ -570,8 +587,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     var online = false
     var autoFetchFailed: Date?
     var languagesWatch: DispatchSourceFileSystemObject?
-    // Watched apps are checked every few seconds. Nil until the first check, so launching after hours closes nothing.
-    var appsWereWanted: Bool?
+    // Watched apps are checked every few seconds; whether each entry (appKey) wanted its app at the last check.
+    // Missing until the first check, so launching after hours closes nothing.
+    var appWasWanted: [String: Bool] = [:]
     var lastAppCheck = Date.distantPast
     var appLaunchTried: [String: Date] = [:]
     let fmt: DateFormatter = { let f = DateFormatter(); f.dateFormat = "HH:mm"; return f }()
@@ -581,15 +599,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         for i in [lastLine, nextLine, todayLine, overtimeLine, breakLine] { i.isEnabled = false }
         holidayLine.submenu = NSMenu(); holidayLine.submenu!.delegate = self
         loadCustomLanguages(); applyLanguageChoice(); reportLanguageProblems(); watchLanguagesFolder()
-        for i in [permLine, pauseItem, intervalItem, workHoursItem, lockItem, nowItem, refetchItem, clearSourceItem, logItem, clearLogItem, autoClearItem, loginItem, sourceItem, appTimesItem] { i.target = self }
+        for i in [permLine, pauseItem, intervalItem, workHoursItem, lockItem, nowItem, refetchItem, clearSourceItem, logItem, clearLogItem, autoClearItem, loginItem, sourceItem] { i.target = self }
         let (now, more, quit) = (nowItem, moreItem, quitItem)
         more.submenu = NSMenu(); languageItem.submenu = NSMenu(); languageItem.submenu!.delegate = self
         loginItem.state = loginAgentOn ? .on : .off
         lockItem.state = nudgeWhenLocked ? .on : .off
         autoClearItem.state = autoClearLog ? .on : .off
         [loginItem, lockItem, languageItem, .separator(), sourceItem, refetchItem, clearSourceItem, .separator(), logItem, clearLogItem, autoClearItem].forEach(more.submenu!.addItem)
-        appTimesItem.image = NSImage(systemSymbolName: "clock.arrow.2.circlepath", accessibilityDescription: nil)
-        for (root, key, sym) in [(leaveRoot, "leave", "airplane"), (overtimeRoot, "overtime", "briefcase"), (breakRoot, "break", "cup.and.saucer"), (reminderRoot, "reminders", "bell"), (appsRoot, "apps", "app.badge.checkmark")] {
+        for (root, key, sym) in [(leaveRoot, "leave", "airplane"), (overtimeRoot, "overtime", "briefcase"), (periodRoot, "periods", "calendar.day.timeline.left"), (reminderRoot, "reminders", "bell"), (appsRoot, "apps", "app.badge.checkmark")] {
             root.representedObject = key
             let v = SectionHeaderView(symbol: sym); v.onClick = { [weak self, weak root] in if let root { self?.toggleSection(root) } }
             root.view = v
@@ -597,14 +614,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         for (i, sym) in [(pauseItem, "pause.circle"), (now, "cursorarrow.motionlines"), (intervalItem, "timer"), (workHoursItem, "clock"), (more, "ellipsis.circle")] {
             i.image = NSImage(systemSymbolName: sym, accessibilityDescription: nil)
         }
-        [lastLine, nextLine, holidayLine, todayLine, overtimeLine, breakLine, permLine, .separator(), pauseItem, now, .separator(), leaveRoot, overtimeRoot, breakRoot, reminderRoot, appsRoot, workHoursItem, intervalItem, .separator(), more, quit].forEach(menu.addItem)
+        [lastLine, nextLine, holidayLine, todayLine, overtimeLine, breakLine, permLine, .separator(), pauseItem, now, .separator(), leaveRoot, overtimeRoot, periodRoot, reminderRoot, appsRoot, workHoursItem, intervalItem, .separator(), more, quit].forEach(menu.addItem)
         item.menu = menu
         loadHolidays()
         loadLeaves()
         loadJSON(overtimeURL, into: &overtimes)
         loadJSON(appsURL, into: &watchedApps)
-        if FileManager.default.fileExists(atPath: breaksURL.path) { loadJSON(breaksURL, into: &breaks) }
-        else { breaks = [Break(from: "12:00", to: "13:00", note: T("break.lunch"), rule: nil)]; saveJSON(breaks, to: breaksURL) }
+        if FileManager.default.fileExists(atPath: periodsURL.path) { loadJSON(periodsURL, into: &periods) }
+        else { periods = [Period(from: "12:00", to: "13:00", note: T("break.lunch"), rule: nil)]; saveJSON(periods, to: periodsURL) }
         loadJSON(remindersURL, into: &reminders)
         // Work start and end reminders are added once; after that they can be turned off or deleted like any other.
         if !UserDefaults.standard.bool(forKey: "workRemindersAdded") {
@@ -646,7 +663,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         clearLogItem.title = T("menu.clearLog"); autoClearItem.title = T("menu.autoClearLog")
         lastLine.title = lastRun.map { T("status.last", $0.time, T($0.result)) } ?? T("status.lastNever")
         if fetching { holidayLine.title = T("status.holidaysFetching") }
-        rebuildLeaveMenu(); rebuildOvertimeMenu(); rebuildBreakMenu(); rebuildReminderMenu(); rebuildAppsMenu()
+        rebuildLeaveMenu(); rebuildOvertimeMenu(); rebuildPeriodMenu(); rebuildReminderMenu(); rebuildAppsMenu()
         tick()
     }
 
@@ -747,7 +764,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         }
     }
 
-    // One-off leave, overtime and breaks are removed once their last day (and end time, if any) has passed.
+    // One-off leave, overtime and periods are removed once their last day (and end time, if any) has passed.
     // Repeating ones stay. Checked at launch and whenever the minute changes.
     var lastPrune = ""
     func pruneExpired() {
@@ -761,10 +778,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         }
         let l = leaves.filter { over($0.end, $0.from, $0.to) }, o = overtimes.filter(otOver)
         func otOver(_ o: Overtime) -> Bool { o.until != nil ? over(o.until, nil, o.to) : over(onceDay(o.rule) ?? (o.rule == nil ? o.end : nil), o.from, o.to) }
-        let b = breaks.filter { over(onceDay($0.rule), $0.from, $0.to) }
+        let b = periods.filter { over(onceDay($0.rule), $0.from, $0.to) }
         if !l.isEmpty { leaves.removeAll { over($0.end, $0.from, $0.to) }; saveLeaves(); rebuildLeaveMenu(); l.forEach { appendLog(T("log.leaveExpired", label($0))) } }
         if !o.isEmpty { overtimes.removeAll(where: otOver); saveJSON(overtimes, to: overtimeURL); rebuildOvertimeMenu(); o.forEach { appendLog(T("log.overtimeExpired", otLabel($0))) } }
-        if !b.isEmpty { breaks.removeAll { over(onceDay($0.rule), $0.from, $0.to) }; saveJSON(breaks, to: breaksURL); rebuildBreakMenu(); b.forEach { appendLog(T("log.breakExpired", breakLabel($0))) } }
+        if !b.isEmpty {
+            periods.removeAll { over(onceDay($0.rule), $0.from, $0.to) }; saveJSON(periods, to: periodsURL); rebuildPeriodMenu()
+            b.forEach { appendLog(T("log.periodExpired", periodLabel($0))); dropApps(following: $0) }
+        }
         // A one-off reminder goes once its minute has passed (tick shows it before pruning).
         let r = reminders.filter { over(onceDay($0.rule), nil, $0.at) }
         if !r.isEmpty { reminders.removeAll { over(onceDay($0.rule), nil, $0.at) }; saveJSON(reminders, to: remindersURL); rebuildReminderMenu(); r.forEach { appendLog(T("log.reminderExpired", reminderLabel($0))) } }
@@ -1091,15 +1111,17 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         }
         return when
     }
-    func breakLabel(_ b: Break) -> String { "\(ruleLabel(b.rule)) " + spanText(b.from, b.to) + (b.note.isEmpty ? "" : "  " + b.note) }
-    func rebuildBreakMenu() {
-        // Repeating ones first, then one-offs by date; finished one-offs are removed by pruneExpired.
-        breaks.sort { ($0.rule?.hasPrefix("once:") ?? false ? $0.rule! : "", $0.from) < ($1.rule?.hasPrefix("once:") ?? false ? $1.rule! : "", $1.from) }
-        fill(breakRoot, breaks.map { (breakLabel($0), $0.disabled == true) }, toggle: { [unowned self] i in
-            defer { saveJSON(breaks, to: breaksURL); replan() }; return flip(&breaks[i].disabled, breakLabel(breaks[i]))
-        }, remove: removeBreak, add: (T("menu.addBreak"), #selector(addBreak), "b"))
+    func periodLabel(_ p: Period) -> String {
+        T(p.work == true ? "period.work" : "period.rest") + "  \(ruleLabel(p.rule)) " + spanText(p.from, p.to) + (p.note.isEmpty ? "" : "  " + p.note)
     }
-    // The Repeat/Date/Week/Weekday rows shared by overtime and breaks. Keep `sync` alive while the form is open; `rule` reads the choice.
+    func rebuildPeriodMenu() {
+        // Repeating ones first, then one-offs by date; finished one-offs are removed by pruneExpired.
+        periods.sort { (onceDay($0.rule) ?? "", $0.from) < (onceDay($1.rule) ?? "", $1.from) }
+        fill(periodRoot, periods.map { (periodLabel($0), $0.disabled == true) }, toggle: { [unowned self] i in
+            defer { saveJSON(periods, to: periodsURL); replan(); checkApps() }; return flip(&periods[i].disabled, periodLabel(periods[i]))
+        }, remove: removePeriod, add: (T("menu.addPeriod"), #selector(addPeriod), "b"))
+    }
+    // The Repeat/Date/Week/Weekday rows shared by overtime, periods and reminders. Keep `sync` alive while the form is open; `rule` reads the choice.
     // `endDay` is the end date field for a one-off that runs over several days; `until` reads it (nil unless after Date).
     func repeatRows(defaultIndex: Int) -> (rows: [(String, NSView)], sync: ClosureTarget, rule: () -> String?, day: NSDatePicker, endDay: NSDatePicker, until: () -> String?) {
         let repeatPop = NSPopUpButton(), ordPop = NSPopUpButton(), weekPop = NSPopUpButton(), day = datePicker(), endDay = datePicker()
@@ -1134,22 +1156,27 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
             return repeatPop.indexOfSelectedItem == 1 && e > s ? e : nil
         })
     }
-    @objc func addBreak() {
-        let rep = repeatRows(defaultIndex: 0), t1 = timePicker("15:00"), t2 = timePicker("16:00"), note = noteField()
+    @objc func addPeriod() {
+        let kind = NSPopUpButton(), rep = repeatRows(defaultIndex: 0), t1 = timePicker("15:00"), t2 = timePicker("16:00"), note = noteField()
+        kind.addItems(withTitles: [T("period.rest"), T("period.work")])
         defer { withExtendedLifetime(rep.sync) {} }
-        note.placeholderString = T("break.notePlaceholder")
-        guard form(T("menu.addBreak"), sentences(T("break.help"), T("help.overnight")),
-                   rep.rows + [(T("form.from"), t1), (T("form.to"), t2), (T("form.note"), note)],
+        note.placeholderString = T("period.notePlaceholder")
+        guard form(T("menu.addPeriod"), sentences(T("period.help"), T("help.overnight")),
+                   [(T("form.kind"), kind)] + rep.rows + [(T("form.from"), t1), (T("form.to"), t2), (T("form.note"), note)],
                    check: { hmFmt.string(from: t2.dateValue) != hmFmt.string(from: t1.dateValue) ? nil : T("error.sameStartEnd") }) else { return }
-        let b = Break(from: hmFmt.string(from: t1.dateValue), to: hmFmt.string(from: t2.dateValue), note: note.stringValue.trimmingCharacters(in: .whitespaces), rule: rep.rule())
-        breaks.append(b); saveJSON(breaks, to: breaksURL); rebuildBreakMenu()
-        appendLog(T("log.breakAdded", breakLabel(b)))
+        let p = Period(from: hmFmt.string(from: t1.dateValue), to: hmFmt.string(from: t2.dateValue), note: note.stringValue.trimmingCharacters(in: .whitespaces),
+                       rule: rep.rule(), work: kind.indexOfSelectedItem == 1 ? true : nil)
+        periods.append(p); saveJSON(periods, to: periodsURL); rebuildPeriodMenu()
+        appendLog(T("log.periodAdded", periodLabel(p)))
         next = nextSlot(after: Date()); tick()
     }
-    func removeBreak(_ i: Int) {
-        guard breaks.indices.contains(i), confirmRemove(T("confirm.deleteBreak"), breakLabel(breaks[i])) else { return }
-        let b = breaks.remove(at: i); saveJSON(breaks, to: breaksURL); rebuildBreakMenu()
-        appendLog(T("log.breakDeleted", breakLabel(b)))
+    // Apps following a period go with it.
+    func removePeriod(_ i: Int) {
+        guard periods.indices.contains(i) else { return }
+        let p = periods[i], bound = watchedApps.filter { $0.follows == p.id }.map(\.name)
+        guard confirmRemove(T("confirm.deletePeriod"), periodLabel(p) + (bound.isEmpty ? "" : "\n\n" + T("period.deleteApps", bound.joined(separator: T("common.listSeparator"))))) else { return }
+        periods.remove(at: i); saveJSON(periods, to: periodsURL); rebuildPeriodMenu()
+        appendLog(T("log.periodDeleted", periodLabel(p))); dropApps(following: p)
         next = nextSlot(after: Date()); tick()
     }
 
@@ -1165,11 +1192,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     @objc func addReminder() {
         let rep = repeatRows(defaultIndex: 1), t = timePicker("10:00"), note = noteField()
         note.placeholderString = T("reminder.notePlaceholder")
-        // Several at once from existing times: work start and end (which follow the work hours), and each break's start
-        // with its repeat, copied so a later change to the break does not move it. "Custom" adds the one in the fields below.
+        // Several at once from existing times: work start and end (which follow the work hours), and each period's start
+        // with its repeat, copied so a later change to the period does not move it. "Custom" adds the one in the fields below.
         let presets: [Reminder] = [workReminder("start"), workReminder("end")]
-            + breaks.filter { $0.disabled != true }.map { Reminder(at: $0.from, note: $0.note.isEmpty ? T("section.breaks") : $0.note, rule: $0.rule) }
-        let titles = [T("reminder.presetWorkStart", workStart), T("reminder.presetWorkEnd", workEnd)] + breaks.filter { $0.disabled != true }.map(breakLabel)
+            + periods.filter { $0.disabled != true }.map { Reminder(at: $0.from, note: $0.note.isEmpty ? T($0.work == true ? "period.work" : "period.rest") : $0.note, rule: $0.rule) }
+        let titles = [T("reminder.presetWorkStart", workStart), T("reminder.presetWorkEnd", workEnd)] + periods.filter { $0.disabled != true }.map(periodLabel)
         let boxes = titles.map { NSButton(checkboxWithTitle: $0, target: nil, action: nil) }
         let list = NSStackView(views: boxes); list.orientation = .vertical; list.alignment = .leading; list.spacing = 4
         // Pick from existing times, or fill in a custom one; only the fields for the chosen way are shown.
@@ -1217,47 +1244,79 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         NSApp.activate(ignoringOtherApps: true); a.window.makeKeyAndOrderFront(nil)
     }
 
-    func rebuildAppsMenu() {
-        appTimesItem.title = T("menu.appTimes", String(appLeadMinutes), String(appLagMinutes))
-        fill(appsRoot, watchedApps.map { ($0.name, $0.disabled == true) }, toggle: { [unowned self] i in
-            defer { saveJSON(watchedApps, to: appsURL); checkApps() }; return flip(&watchedApps[i].disabled, watchedApps[i].name)
-        }, remove: removeApp, add: (T("menu.addApp"), #selector(addApp), ""), extra: [appTimesItem])
+    func followName(_ follows: String?) -> String {
+        switch follows ?? "work" {
+        case "work": return T("apps.followWork")
+        case "overtime": return T("section.overtime")
+        case let id: return periods.first { $0.id == id }.map { $0.note.isEmpty ? spanText($0.from, $0.to) : $0.note + " " + spanText($0.from, $0.to) } ?? T("apps.periodGone")
+        }
     }
+    func appLabel(_ a: WatchedApp) -> String {
+        let lead = a.lead ?? 0, lag = a.lag ?? 0
+        let timing = a.keepOpen == true ? (lead > 0 ? T("apps.earlyNoQuit", String(lead)) : T("apps.noQuit"))
+            : lead + lag > 0 ? T("apps.timing", String(lead), String(lag)) : ""
+        return a.name + "  " + followName(a.follows) + (timing.isEmpty ? "" : T("common.paren", timing))
+    }
+    func appKey(_ a: WatchedApp) -> String { a.path + "|" + (a.follows ?? "work") }
+    func rebuildAppsMenu() {
+        fill(appsRoot, watchedApps.map { (appLabel($0), $0.disabled == true) }, toggle: { [unowned self] i in
+            defer { saveJSON(watchedApps, to: appsURL); checkApps() }; return flip(&watchedApps[i].disabled, appLabel(watchedApps[i]))
+        }, remove: removeApp, add: (T("menu.addApp"), #selector(addApp), ""))
+    }
+    // Pick the apps, then what they follow: work hours, overtime or a period, with minutes early and late.
     @objc func addApp() {
         NSApp.activate(ignoringOtherApps: true)
-        let p = NSOpenPanel(); p.message = T("apps.pickHelp"); p.prompt = T("common.add")
+        let p = NSOpenPanel(); p.message = T("apps.pickHelp"); p.prompt = T("common.next")
         p.allowedContentTypes = [.application]; p.allowsMultipleSelection = true; p.directoryURL = URL(fileURLWithPath: "/Applications")
-        guard p.runModal() == .OK else { return }
-        for url in p.urls where !watchedApps.contains(where: { $0.path == url.path }) {
-            let a = WatchedApp(name: url.deletingPathExtension().lastPathComponent, path: url.path, bundleID: Bundle(url: url)?.bundleIdentifier)
-            watchedApps.append(a); appendLog(T("log.appAdded", a.name))
+        guard p.runModal() == .OK, !p.urls.isEmpty else { return }
+        let names = p.urls.map { $0.deletingPathExtension().lastPathComponent }
+        let choices: [String] = ["work", "overtime"] + periods.filter { $0.disabled != true }.map(\.id)
+        let follow = NSPopUpButton(); follow.addItems(withTitles: [T("apps.followWork"), T("section.overtime")] + periods.filter { $0.disabled != true }.map(periodLabel))
+        let lead = noteField(), lag = noteField(), quit = NSButton(checkboxWithTitle: T("apps.autoQuit"), target: nil, action: nil)
+        lead.stringValue = "0"; lag.stringValue = "0"; quit.state = .on
+        // Minutes late only matter when the app is quit.
+        let sync = ClosureTarget { [unowned self] in lag.isHidden = quit.state == .off; self.refitForm(quit) }
+        quit.target = sync; quit.action = #selector(ClosureTarget.fire)
+        defer { withExtendedLifetime(sync) {} }
+        func minutes(_ f: NSTextField) -> Int? { Int(f.stringValue.trimmingCharacters(in: .whitespaces)).flatMap { (0...240).contains($0) ? $0 : nil } }
+        guard form(T("apps.ruleTitle", names.joined(separator: T("common.listSeparator"))), T("apps.ruleHelp"),
+                   [(T("form.follow"), follow), (T("form.openEarly"), lead), (T("form.quit"), quit), (T("form.closeLate"), lag)],
+                   check: { minutes(lead) != nil && (quit.state == .off || minutes(lag) != nil) ? nil : T("appTimes.invalid") }) else { return }
+        let follows = choices[follow.indexOfSelectedItem], keep = quit.state == .off
+        // The same app can follow several times; the same app and time again only updates the minutes.
+        for (url, name) in zip(p.urls, names) {
+            var a = WatchedApp(name: name, path: url.path, bundleID: Bundle(url: url)?.bundleIdentifier, follows: follows,
+                               lead: minutes(lead), lag: keep ? nil : minutes(lag), keepOpen: keep ? true : nil)
+            if let i = watchedApps.firstIndex(where: { appKey($0) == appKey(a) }) { a.disabled = nil; watchedApps[i] = a } else { watchedApps.append(a) }
+            appendLog(T("log.appAdded", appLabel(a)))
         }
         saveJSON(watchedApps, to: appsURL); rebuildAppsMenu(); checkApps()
     }
     func removeApp(_ i: Int) {
-        guard watchedApps.indices.contains(i), confirmRemove(T("confirm.deleteApp"), watchedApps[i].name) else { return }
+        guard watchedApps.indices.contains(i), confirmRemove(T("confirm.deleteApp"), appLabel(watchedApps[i])) else { return }
         let a = watchedApps.remove(at: i); saveJSON(watchedApps, to: appsURL); rebuildAppsMenu()
-        appendLog(T("log.appDeleted", a.name))
+        appendLog(T("log.appDeleted", appLabel(a)))
     }
-    @objc func setAppTimes() {
-        let lead = noteField(), lag = noteField()
-        lead.stringValue = String(appLeadMinutes); lag.stringValue = String(appLagMinutes)
-        func minutes(_ f: NSTextField) -> Int? { Int(f.stringValue.trimmingCharacters(in: .whitespaces)).flatMap { (0...240).contains($0) ? $0 : nil } }
-        guard form(T("appTimes.title"), T("appTimes.help"), [(T("form.openEarly"), lead), (T("form.closeLate"), lag)], button: T("common.save"),
-                   check: { minutes(lead) != nil && minutes(lag) != nil ? nil : T("appTimes.invalid") }) else { return }
-        appLeadMinutes = minutes(lead)!; appLagMinutes = minutes(lag)!
-        UserDefaults.standard.set(appLeadMinutes, forKey: "appLeadMinutes"); UserDefaults.standard.set(appLagMinutes, forKey: "appLagMinutes")
-        rebuildAppsMenu(); appendLog(T("log.appTimesChanged", String(appLeadMinutes), String(appLagMinutes)))
-        checkApps()
+    func dropApps(following p: Period) {
+        let gone = watchedApps.filter { $0.follows == p.id }
+        guard !gone.isEmpty else { return }
+        watchedApps.removeAll { $0.follows == p.id }; saveJSON(watchedApps, to: appsURL); rebuildAppsMenu()
+        gone.forEach { appendLog(T("log.appDeleted", $0.name)) }
     }
-    // Opens any watched app that isn't running while it is wanted (a failed launch is retried after a minute),
-    // and quits them once when the stretch ends; an app opened by hand after hours is left alone.
+    // Opens any watched app that isn't running while it is wanted (a failed launch is retried after a minute), and
+    // quits it once when its time ends; an app opened by hand outside its time is left alone. Entries for the same app
+    // go together: it is wanted while any of them wants it, and is quit when the last ends, unless each entry that just
+    // ended keeps it open.
     func checkApps() {
-        let now = Date(), wanted = appsWanted(now), ending = appsWereWanted == true && !wanted
-        lastAppCheck = now; appsWereWanted = wanted
-        guard wanted || ending else { return }
+        let now = Date(); lastAppCheck = now
         let running = NSWorkspace.shared.runningApplications
-        for a in watchedApps where a.disabled != true {
+        for path in Set(watchedApps.map(\.path)) {
+            let group = watchedApps.filter { $0.path == path }, a = group[0]
+            let ended = group.filter { $0.disabled != true && appWasWanted[appKey($0)] == true }
+            let wanted = group.contains { appWanted($0, now) }
+            group.forEach { appWasWanted[appKey($0)] = appWanted($0, now) }
+            let ending = !wanted && ended.contains { $0.keepOpen != true }
+            guard wanted || ending else { continue }
             let mine = running.filter { $0.bundleURL?.path == a.path || (a.bundleID != nil && $0.bundleIdentifier == a.bundleID) }
             if ending {
                 if !mine.isEmpty { mine.forEach { $0.terminate() }; appendLog(T("log.appClosed", a.name)) }
