@@ -771,10 +771,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     let moreItem = NSMenuItem(title: "", action: nil, keyEquivalent: "")
     let loginItem = NSMenuItem(title: "", action: #selector(toggleLogin(_:)), keyEquivalent: "")
     let sourceItem = NSMenuItem(title: "", action: #selector(setHolidaySource), keyEquivalent: "")
-    // The saved holiday calendars, one ticked. Rebuilt only when they change: replacing the items of an open menu
-    // would drop the click.
-    let calendarsItem = NSMenuItem(title: "", action: nil, keyEquivalent: "")
-    var calendarsShown = [String]()
+    // What the holiday line's submenu shows; it is rebuilt only when this changes, since replacing the items of an
+    // open menu would drop the click.
+    var holidayMenuShown = [String]()
     let languageItem = NSMenuItem(title: "", action: nil, keyEquivalent: "")
     let quitItem = NSMenuItem(title: "", action: #selector(NSApplication.terminate(_:)), keyEquivalent: "q")
     // The last run's time and result key, kept so the line can be retitled in another language.
@@ -804,15 +803,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     func applicationDidFinishLaunching(_ n: Notification) {
         item.button?.font = .monospacedDigitSystemFont(ofSize: NSFont.systemFontSize, weight: .regular)
         for i in [lastLine, nextLine, todayLine, overtimeLine, breakLine] { i.isEnabled = false }
-        holidayLine.submenu = NSMenu(); holidayLine.submenu!.delegate = self
+        holidayLine.submenu = NSMenu()
         loadCustomLanguages(); applyLanguageChoice(); reportLanguageProblems(); watchLanguagesFolder()
         for i in [permLine, pauseItem, workHoursItem, refetchItem, clearSourceItem, logItem, clearLogItem, autoClearItem, loginItem, sourceItem] { i.target = self }
         let (more, quit) = (moreItem, quitItem)
         more.submenu = NSMenu(); languageItem.submenu = NSMenu(); languageItem.submenu!.delegate = self
         loginItem.state = loginAgentOn ? .on : .off
         autoClearItem.state = autoClearLog ? .on : .off
-        calendarsItem.submenu = NSMenu()
-        [loginItem, languageItem, .separator(), calendarsItem, .separator(), logItem, clearLogItem, autoClearItem].forEach(more.submenu!.addItem)
+        [loginItem, languageItem, .separator(), logItem, clearLogItem, autoClearItem].forEach(more.submenu!.addItem)
         for (root, key, sym) in [(leaveRoot, "leave", "airplane"), (overtimeRoot, "overtime", "briefcase"), (periodRoot, "periods", "calendar.day.timeline.left"), (tasksRoot, "tasks", "bell")] {
             root.representedObject = key
             let v = SectionHeaderView(symbol: sym); v.onClick = { [weak self, weak root] in if let root { self?.toggleSection(root) } }
@@ -861,7 +859,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     func retitle() {
         permLine.title = T("status.needAccessibility")
         refetchItem.title = T("menu.refetchHolidays"); clearSourceItem.title = T("menu.unsubscribeHoliday"); logItem.title = T("menu.openLog")
-        moreItem.title = T("menu.more"); loginItem.title = T("menu.openAtLogin"); sourceItem.title = T("menu.addHolidayCalendar"); calendarsItem.title = T("menu.holidayCalendars"); calendarsShown = []
+        moreItem.title = T("menu.more"); loginItem.title = T("menu.openAtLogin"); sourceItem.title = T("menu.addHolidayCalendar"); holidayMenuShown = []
         quitItem.title = T("menu.quit")
         // Always says "Language" too, so someone stuck in a language they can't read still finds it.
         languageItem.title = T("menu.language") == "Language" ? "Language" : T("menu.language") + " / Language"
@@ -1047,7 +1045,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         pauseItem.isHidden = !jobs.contains { $0.disabled != true }
         // With no source there is nothing to refetch or clear.
         refetchItem.isHidden = holidaySource.isEmpty; clearSourceItem.isHidden = holidaySource.isEmpty
-        buildCalendarsMenu()
+        buildHolidayMenu()
         pauseItem.title = paused ? T("menu.resume") : T("menu.pause")
         if !fetching {
             let k = dayKey.string(from: now)
@@ -1795,10 +1793,30 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     // This year's holidays, filled in each time the submenu opens; past days are greyed out.
     func menuNeedsUpdate(_ menu: NSMenu) {
         if menu === languageItem.submenu { buildLanguageMenu(menu); return }
-        guard menu === holidayLine.submenu else { return }
-        menu.removeAllItems()
+    }
+    // The holiday line's submenu: the saved calendars to switch between, what can be done with them,
+    // then this year's holidays, past days greyed out.
+    func buildHolidayMenu() {
+        let cache = cachedCalendars()
+        let rows = (holidaySources + [""]).map { source in
+            (source, source.isEmpty ? T("menu.noHolidayCalendar")
+                : (source == holidaySource ? holidays.name : nil) ?? cache[source]?.name ?? source.replacingOccurrences(of: #"^\w+://"#, with: "", options: .regularExpression))
+        }
         let k = dayKey.string(from: Date()), year = String(k.prefix(4))
         let keys = holidays.days.keys.filter { $0.hasPrefix(year) }.sorted()
+        let shown = rows.map { $0.0 + "\t" + $0.1 } + [holidaySource, k] + keys.map { $0 + holidays.days[$0]! }
+        guard shown != holidayMenuShown, let menu = holidayLine.submenu else { return }
+        holidayMenuShown = shown; menu.removeAllItems()
+        for (source, name) in rows {
+            let it = NSMenuItem(title: name, action: #selector(switchHolidayCalendar(_:)), keyEquivalent: "")
+            it.target = self; it.representedObject = source; it.toolTip = source.isEmpty ? nil : source
+            it.state = source == holidaySource ? .on : .off
+            menu.addItem(it)
+        }
+        [.separator(), sourceItem, refetchItem, clearSourceItem].forEach(menu.addItem)
+        guard !holidaySource.isEmpty else { return }
+        menu.addItem(.separator())
+        menu.addItem(NSMenuItem(title: T("holiday.yearHeader", year), action: nil, keyEquivalent: ""))
         let label = localFmt("MdEEE")
         let nextKey = keys.first { $0 >= k }
         for key in keys {
@@ -1811,23 +1829,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     }
     @objc func noop() {}
 
-    func buildCalendarsMenu() {
-        let cache = cachedCalendars()
-        let rows = (holidaySources + [""]).map { source in
-            (source, source.isEmpty ? T("menu.noHolidayCalendar")
-                : (source == holidaySource ? holidays.name : nil) ?? cache[source]?.name ?? source.replacingOccurrences(of: #"^\w+://"#, with: "", options: .regularExpression))
-        }
-        let shown = rows.map { $0.0 + "\t" + $0.1 } + [holidaySource]
-        guard shown != calendarsShown, let menu = calendarsItem.submenu else { return }
-        calendarsShown = shown; menu.removeAllItems()
-        for (source, name) in rows {
-            let it = NSMenuItem(title: name, action: #selector(switchHolidayCalendar(_:)), keyEquivalent: "")
-            it.target = self; it.representedObject = source; it.toolTip = source.isEmpty ? nil : source
-            it.state = source == holidaySource ? .on : .off
-            menu.addItem(it)
-        }
-        [.separator(), sourceItem, refetchItem, clearSourceItem].forEach(menu.addItem)
-    }
     // Switching uses the calendar's saved copy at once and fetches it only when that is missing or from an earlier year.
     @objc func switchHolidayCalendar(_ sender: NSMenuItem) {
         guard !fetching, let source = sender.representedObject as? String, source != holidaySource else { return }

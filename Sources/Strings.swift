@@ -282,6 +282,7 @@ let translations: [String: [String: String]] = [
         "menu.addHolidayCalendar": "添加假期日历…",
         "log.holidaySwitched": "假期日历切换为 %@",
         "log.holidayNone": "不用假期日历，只排除周末",
+        "holiday.yearHeader": "%@ 年的假期",
     ],
     "en": [
         "week.first": "1st",
@@ -565,6 +566,7 @@ let translations: [String: [String: String]] = [
         "menu.addHolidayCalendar": "Add Holiday Calendar…",
         "log.holidaySwitched": "Holiday calendar switched to %@",
         "log.holidayNone": "No holiday calendar, weekends only",
+        "holiday.yearHeader": "Holidays in %@",
     ],
     "zh-Hant": [
         "week.first": "第一個",
@@ -848,6 +850,7 @@ let translations: [String: [String: String]] = [
         "menu.addHolidayCalendar": "新增假期日曆…",
         "log.holidaySwitched": "假期日曆切換為 %@",
         "log.holidayNone": "不使用假期日曆，只排除週末",
+        "holiday.yearHeader": "%@ 年的假期",
     ],
     "ja": [
         "week.first": "第1",
@@ -1131,6 +1134,7 @@ let translations: [String: [String: String]] = [
         "menu.addHolidayCalendar": "祝日カレンダーを追加…",
         "log.holidaySwitched": "祝日カレンダーを %@ に切り替え",
         "log.holidayNone": "祝日カレンダーなし、週末のみ",
+        "holiday.yearHeader": "%@ 年の祝日",
     ],
     "ko": [
         "week.first": "첫째",
@@ -1414,6 +1418,7 @@ let translations: [String: [String: String]] = [
         "menu.addHolidayCalendar": "공휴일 캘린더 추가…",
         "log.holidaySwitched": "공휴일 캘린더를 %@(으)로 전환",
         "log.holidayNone": "공휴일 캘린더 없음, 주말만",
+        "holiday.yearHeader": "%@년 공휴일",
     ],
     "ms": [
         "week.first": "pertama",
@@ -1697,6 +1702,7 @@ let translations: [String: [String: String]] = [
         "menu.addHolidayCalendar": "Tambah Kalendar Cuti…",
         "log.holidaySwitched": "Kalendar cuti ditukar kepada %@",
         "log.holidayNone": "Tiada kalendar cuti, hujung minggu sahaja",
+        "holiday.yearHeader": "Cuti umum %@",
     ],
     "es": [
         "week.first": "primer",
@@ -1980,6 +1986,7 @@ let translations: [String: [String: String]] = [
         "menu.addHolidayCalendar": "Añadir calendario de festivos…",
         "log.holidaySwitched": "Calendario de festivos cambiado a %@",
         "log.holidayNone": "Sin calendario de festivos, solo fines de semana",
+        "holiday.yearHeader": "Festivos de %@",
     ],
     "fr": [
         "week.first": "1er",
@@ -2263,6 +2270,7 @@ let translations: [String: [String: String]] = [
         "menu.addHolidayCalendar": "Ajouter un calendrier des jours fériés…",
         "log.holidaySwitched": "Calendrier des jours fériés changé pour %@",
         "log.holidayNone": "Aucun calendrier des jours fériés, week-ends seulement",
+        "holiday.yearHeader": "Jours fériés %@",
     ],
     "de": [
         "week.first": "1.",
@@ -2546,6 +2554,7 @@ let translations: [String: [String: String]] = [
         "menu.addHolidayCalendar": "Feiertagskalender hinzufügen…",
         "log.holidaySwitched": "Feiertagskalender gewechselt zu %@",
         "log.holidayNone": "Kein Feiertagskalender, nur Wochenenden",
+        "holiday.yearHeader": "Feiertage %@",
     ],
 ]
 // Template order.
@@ -2831,4 +2840,5 @@ let translationKeys: [String] = [
     "menu.addHolidayCalendar",
     "log.holidaySwitched",
     "log.holidayNone",
+    "holiday.yearHeader",
 ]
