@@ -681,6 +681,91 @@ final class SectionHeaderView: NSView {
     override func accessibilityPerformPress() -> Bool { onClick(); return true }
 }
 
+// A menu item whose click runs its action without closing the menu, for switches and toggles that change things in place.
+// It draws like a normal item (check mark, icon, title, key equivalent) from the item's own properties, which redraw it.
+final class StayOpenMenuItem: NSMenuItem {
+    let row = StayOpenRowView()
+    override init(title: String, action: Selector?, keyEquivalent: String) {
+        super.init(title: title, action: action, keyEquivalent: keyEquivalent)
+        row.item = self; view = row; row.sync()
+    }
+    convenience init(_ title: String = "", action: Selector?, keyEquivalent: String = "") { self.init(title: title, action: action, keyEquivalent: keyEquivalent) }
+    required init(coder: NSCoder) { fatalError() }
+    override var title: String { didSet { row.sync() } }
+    override var state: NSControl.StateValue { didSet { row.sync() } }
+    override var isEnabled: Bool { didSet { row.sync() } }
+    override var image: NSImage? { didSet { row.sync() } }
+}
+
+final class StayOpenRowView: NSView {
+    weak var item: NSMenuItem?
+    let check = NSImageView(), icon = NSImageView(), label = NSTextField(labelWithString: ""), key = NSTextField(labelWithString: "")
+    var hovered = false { didSet { refresh() } }
+
+    init() {
+        super.init(frame: NSRect(x: 0, y: 0, width: 200, height: 22))
+        autoresizingMask = [.width]
+        check.image = NSImage(systemSymbolName: "checkmark", accessibilityDescription: nil)?.withSymbolConfiguration(.init(pointSize: 11, weight: .semibold))
+        label.font = .menuFont(ofSize: 0); key.font = .menuFont(ofSize: 0)
+        for v in [check, icon, label, key] as [NSView] { addSubview(v) }
+    }
+    required init?(coder: NSCoder) { fatalError() }
+
+    // Lays the row out like a standard item: a check column, then the icon if any, the title, and the key equivalent on the right.
+    func sync() {
+        guard let item else { return }
+        label.stringValue = item.title
+        icon.image = item.image; icon.isHidden = item.image == nil
+        check.isHidden = item.state != .on
+        key.stringValue = item.keyEquivalent.isEmpty ? "" : "⌘" + item.keyEquivalent.uppercased()
+        let h = bounds.height
+        var x: CGFloat = 22
+        check.frame = NSRect(x: 8, y: (h - 14) / 2, width: 14, height: 14)
+        if item.image != nil { icon.frame = NSRect(x: x, y: (h - 16) / 2, width: 16, height: 16); x += 22 }
+        label.sizeToFit(); label.frame.origin = NSPoint(x: x, y: (h - label.frame.height) / 2)
+        key.sizeToFit()
+        let width = x + label.frame.width + (key.stringValue.isEmpty ? 0 : 24 + key.frame.width) + 18
+        if frame.width < width { frame.size.width = width }
+        key.frame.origin = NSPoint(x: bounds.width - key.frame.width - 14, y: (h - key.frame.height) / 2)
+        key.autoresizingMask = [.minXMargin]
+        setAccessibilityLabel(item.title)
+        refresh()
+    }
+    override func resizeSubviews(withOldSize s: NSSize) { super.resizeSubviews(withOldSize: s); key.frame.origin.x = bounds.width - key.frame.width - 14 }
+
+    var enabled: Bool { item?.isEnabled ?? false }
+    var lit: Bool { enabled && (hovered || item?.isHighlighted == true) }
+    func refresh() {
+        let fg: NSColor = lit ? .selectedMenuItemTextColor : enabled ? .labelColor : .disabledControlTextColor
+        label.textColor = fg; check.contentTintColor = fg; icon.contentTintColor = fg
+        key.textColor = lit ? fg : .secondaryLabelColor
+        needsDisplay = true
+    }
+    override func draw(_ r: NSRect) {
+        guard lit else { return }
+        NSColor.selectedContentBackgroundColor.setFill()
+        NSBezierPath(roundedRect: bounds.insetBy(dx: 5, dy: 0), xRadius: 6, yRadius: 6).fill()
+    }
+    override func updateTrackingAreas() {
+        trackingAreas.forEach(removeTrackingArea)
+        addTrackingArea(NSTrackingArea(rect: .zero, options: [.mouseEnteredAndExited, .activeAlways, .inVisibleRect], owner: self))
+    }
+    override func viewDidMoveToWindow() { hovered = false; refresh() }
+    override func mouseEntered(with e: NSEvent) { hovered = true }
+    override func mouseExited(with e: NSEvent) { hovered = false }
+    override func mouseUp(with e: NSEvent) { press() }
+    // The action runs after the click is done, so it may rebuild the menu this row is in.
+    @discardableResult func press() -> Bool {
+        guard let item, item.isEnabled, let action = item.action else { return false }
+        DispatchQueue.main.async { NSApp.sendAction(action, to: item.target, from: item) }
+        return true
+    }
+    override func isAccessibilityElement() -> Bool { true }
+    override func accessibilityRole() -> NSAccessibility.Role? { .menuItem }
+    override func accessibilityValue() -> Any? { item?.state == .on ? 1 : 0 }
+    override func accessibilityPerformPress() -> Bool { press() }
+}
+
 // An entry row: its label, then a test button (tasks only) that runs it once now, an edit button, a pause/resume button
 // that turns the entry off or on in place (the menu stays open) and a delete button. A turned-off entry is greyed out.
 final class EntryRowView: NSView {
@@ -763,15 +848,15 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     var expanded = Set((UserDefaults.standard.stringArray(forKey: "expanded") ?? []).map { ["休假": "leave", "加班": "overtime", "休息时间": "periods", "break": "periods"][$0] ?? $0 })
     var sectionRows: [String: [NSMenuItem]] = [:]
     var sectionCount: [String: Int] = [:]
-    let pauseItem = NSMenuItem(title: "", action: #selector(togglePause), keyEquivalent: "p")
+    let pauseItem = StayOpenMenuItem("", action: #selector(togglePause), keyEquivalent: "p")
     let workHoursItem = NSMenuItem(title: "", action: #selector(setWorkHours), keyEquivalent: "")
-    let refetchItem = NSMenuItem(title: "", action: #selector(refetchHolidays), keyEquivalent: "")
+    let refetchItem = StayOpenMenuItem("", action: #selector(refetchHolidays))
     let clearSourceItem = NSMenuItem(title: "", action: #selector(clearHolidaySource), keyEquivalent: "")
     let logItem = NSMenuItem(title: "", action: #selector(openLog), keyEquivalent: "")
     let clearLogItem = NSMenuItem(title: "", action: #selector(clearLog), keyEquivalent: "")
-    let autoClearItem = NSMenuItem(title: "", action: #selector(toggleAutoClear(_:)), keyEquivalent: "")
+    let autoClearItem = StayOpenMenuItem("", action: #selector(toggleAutoClear(_:)))
     let moreItem = NSMenuItem(title: "", action: nil, keyEquivalent: "")
-    let loginItem = NSMenuItem(title: "", action: #selector(toggleLogin(_:)), keyEquivalent: "")
+    let loginItem = StayOpenMenuItem("", action: #selector(toggleLogin(_:)))
     let sourceItem = NSMenuItem(title: "", action: #selector(setHolidaySource), keyEquivalent: "")
     // What the holiday line's submenu shows; it is rebuilt only when this changes, since replacing the items of an
     // open menu would drop the click.
@@ -882,10 +967,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         if applyLanguageChoice() { retitle() }
         reportLanguageProblems()
         m.removeAllItems()
-        let sys = NSMenuItem(title: T("language.system", languageName(systemLanguage())), action: #selector(chooseLanguage(_:)), keyEquivalent: "")
+        let sys = StayOpenMenuItem(T("language.system", languageName(systemLanguage())), action: #selector(chooseLanguage(_:)))
         sys.target = self; sys.state = languageChoice == nil ? .on : .off; m.addItem(sys); m.addItem(.separator())
         for code in languageCodes() {
-            let it = NSMenuItem(title: languageName(code), action: #selector(chooseLanguage(_:)), keyEquivalent: "")
+            let it = StayOpenMenuItem(languageName(code), action: #selector(chooseLanguage(_:)))
             it.target = self; it.representedObject = code; it.state = languageChoice == code ? .on : .off
             if code == builtinLanguages.last?.code, customLanguages.contains(where: { c in !builtinLanguages.contains { $0.code == c.code } }) {
                 m.addItem(it); m.addItem(.separator()); continue
@@ -942,6 +1027,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     @objc func chooseLanguage(_ sender: NSMenuItem) {
         languageChoice = sender.representedObject as? String
         if applyLanguageChoice() { retitle() }
+        if let m = languageItem.submenu { buildLanguageMenu(m) }
     }
     @objc func downloadTemplate(_ sender: NSMenuItem) {
         do {
@@ -959,7 +1045,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     // `report` (Refresh holidays) says why a fetch did not work; automatic fetches only log it.
     func checkHolidays(force: Bool = false, report: Bool = false) {
         guard !fetching, !holidaySource.isEmpty, force || holidaysStale() else { return }
-        guard online else { if report { holidayProblem(.offline, link: nil) }; return }
+        guard online else { if report { reportHolidayProblem(.offline) }; return }
         if !force, let f = autoFetchFailed, Date().timeIntervalSince(f) < 3600 { return }
         fetching = true
         holidayLine.title = T("status.holidaysFetching")
@@ -967,7 +1053,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
             guard let self else { return }
             self.fetching = false
             self.autoFetchFailed = failure == nil ? nil : Date()
-            if let failure, report { self.holidayProblem(failure, link: nil) }
+            if let failure, report { self.reportHolidayProblem(failure) }
             self.next = nextSlot(after: Date())
             self.tick()
         }
@@ -1831,7 +1917,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         guard shown != holidayMenuShown, let menu = holidayLine.submenu else { return }
         holidayMenuShown = shown; menu.removeAllItems()
         for (source, name) in rows {
-            let it = NSMenuItem(title: name, action: #selector(switchHolidayCalendar(_:)), keyEquivalent: "")
+            let it = StayOpenMenuItem(name, action: #selector(switchHolidayCalendar(_:)))
             it.target = self; it.representedObject = source; it.toolTip = source.isEmpty ? nil : source
             it.state = source == holidaySource ? .on : .off
             menu.addItem(it)
@@ -1897,6 +1983,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         }
     }
     // Says why a calendar could not be used. For a link just typed in, the person can go back and correct it.
+    // Refresh holidays leaves the menu open, so it is closed before saying what went wrong.
+    func reportHolidayProblem(_ f: HolidayFetchError) {
+        menu.cancelTracking()
+        DispatchQueue.main.async { self.holidayProblem(f, link: nil) }
+    }
     func holidayProblem(_ f: HolidayFetchError, link: String?) {
         NSApp.activate(ignoringOtherApps: true)
         let a = NSAlert(); a.alertStyle = .warning; a.messageText = f.title
