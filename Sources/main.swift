@@ -1928,14 +1928,17 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         let nextKey = years.flatMap { $0.1 }.first { $0 >= k }
         for (y, keys) in years {
             menu.addItem(.separator())
-            menu.addItem(NSMenuItem(title: T("holiday.yearHeader", y), action: nil, keyEquivalent: ""))
+            let header = NSMenuItem(title: T("holiday.yearHeader", y), action: nil, keyEquivalent: ""); header.isEnabled = false
+            menu.addItem(header)
             for key in keys {
                 let it = NSMenuItem(title: "\(label.string(from: dayKey.date(from: key)!))  \(holidays.days[key]!)" + (key == nextKey ? "  " + T("holiday.nextMarker") : ""), action: nil, keyEquivalent: "")
                 // An action keeps upcoming days in normal text; clicking them does nothing.
                 if key >= k { it.action = #selector(noop); it.target = self }
+                // Greyed out here too, since a menu rebuilt while open is not checked again for what is enabled.
+                it.isEnabled = key >= k
                 menu.addItem(it)
             }
-            if keys.isEmpty { menu.addItem(NSMenuItem(title: T("holiday.noYearData", y), action: nil, keyEquivalent: "")) }
+            if keys.isEmpty { let none = NSMenuItem(title: T("holiday.noYearData", y), action: nil, keyEquivalent: ""); none.isEnabled = false; menu.addItem(none) }
         }
     }
     @objc func noop() {}
