@@ -283,6 +283,9 @@ let translations: [String: [String: String]] = [
         "log.holidaySwitched": "假期日历切换为 %@",
         "log.holidayNone": "不用假期日历，只排除周末",
         "holiday.yearHeader": "%@ 年的假期",
+        "follow.anyOvertime": "所有加班",
+        "overtime.boundTasks": "这些定时任务只跟随这段加班：",
+        "overtime.keepTasks": "只删加班，保留任务",
     ],
     "en": [
         "week.first": "1st",
@@ -567,6 +570,9 @@ let translations: [String: [String: String]] = [
         "log.holidaySwitched": "Holiday calendar switched to %@",
         "log.holidayNone": "No holiday calendar, weekends only",
         "holiday.yearHeader": "Holidays in %@",
+        "follow.anyOvertime": "Any overtime",
+        "overtime.boundTasks": "These tasks follow only this overtime:",
+        "overtime.keepTasks": "Delete overtime, keep tasks",
     ],
     "zh-Hant": [
         "week.first": "第一個",
@@ -851,6 +857,9 @@ let translations: [String: [String: String]] = [
         "log.holidaySwitched": "假期日曆切換為 %@",
         "log.holidayNone": "不使用假期日曆，只排除週末",
         "holiday.yearHeader": "%@ 年的假期",
+        "follow.anyOvertime": "所有加班",
+        "overtime.boundTasks": "這些定時任務只跟隨這段加班：",
+        "overtime.keepTasks": "只刪加班，保留任務",
     ],
     "ja": [
         "week.first": "第1",
@@ -1135,6 +1144,9 @@ let translations: [String: [String: String]] = [
         "log.holidaySwitched": "祝日カレンダーを %@ に切り替え",
         "log.holidayNone": "祝日カレンダーなし、週末のみ",
         "holiday.yearHeader": "%@ 年の祝日",
+        "follow.anyOvertime": "すべての残業",
+        "overtime.boundTasks": "次のタスクはこの残業だけに従っています：",
+        "overtime.keepTasks": "残業だけ削除",
     ],
     "ko": [
         "week.first": "첫째",
@@ -1419,6 +1431,9 @@ let translations: [String: [String: String]] = [
         "log.holidaySwitched": "공휴일 캘린더를 %@(으)로 전환",
         "log.holidayNone": "공휴일 캘린더 없음, 주말만",
         "holiday.yearHeader": "%@년 공휴일",
+        "follow.anyOvertime": "모든 초과근무",
+        "overtime.boundTasks": "다음 작업은 이 초과근무만 따릅니다:",
+        "overtime.keepTasks": "초과근무만 삭제",
     ],
     "ms": [
         "week.first": "pertama",
@@ -1703,6 +1718,9 @@ let translations: [String: [String: String]] = [
         "log.holidaySwitched": "Kalendar cuti ditukar kepada %@",
         "log.holidayNone": "Tiada kalendar cuti, hujung minggu sahaja",
         "holiday.yearHeader": "Cuti umum %@",
+        "follow.anyOvertime": "Sebarang lebih masa",
+        "overtime.boundTasks": "Tugasan ini hanya mengikut lebih masa ini:",
+        "overtime.keepTasks": "Padam lebih masa, simpan tugasan",
     ],
     "es": [
         "week.first": "primer",
@@ -1987,6 +2005,9 @@ let translations: [String: [String: String]] = [
         "log.holidaySwitched": "Calendario de festivos cambiado a %@",
         "log.holidayNone": "Sin calendario de festivos, solo fines de semana",
         "holiday.yearHeader": "Festivos de %@",
+        "follow.anyOvertime": "Cualquier hora extra",
+        "overtime.boundTasks": "Estas tareas solo siguen estas horas extra:",
+        "overtime.keepTasks": "Eliminar horas extra y conservar tareas",
     ],
     "fr": [
         "week.first": "1er",
@@ -2271,6 +2292,9 @@ let translations: [String: [String: String]] = [
         "log.holidaySwitched": "Calendrier des jours fériés changé pour %@",
         "log.holidayNone": "Aucun calendrier des jours fériés, week-ends seulement",
         "holiday.yearHeader": "Jours fériés %@",
+        "follow.anyOvertime": "Toutes heures sup.",
+        "overtime.boundTasks": "Ces tâches ne suivent que ces heures sup. :",
+        "overtime.keepTasks": "Supprimer les heures sup., garder les tâches",
     ],
     "de": [
         "week.first": "1.",
@@ -2555,6 +2579,9 @@ let translations: [String: [String: String]] = [
         "log.holidaySwitched": "Feiertagskalender gewechselt zu %@",
         "log.holidayNone": "Kein Feiertagskalender, nur Wochenenden",
         "holiday.yearHeader": "Feiertage %@",
+        "follow.anyOvertime": "Alle Überstunden",
+        "overtime.boundTasks": "Diese Aufgaben folgen nur diesen Überstunden:",
+        "overtime.keepTasks": "Nur Überstunden löschen",
     ],
 ]
 // Template order.
@@ -2841,4 +2868,7 @@ let translationKeys: [String] = [
     "log.holidaySwitched",
     "log.holidayNone",
     "holiday.yearHeader",
+    "follow.anyOvertime",
+    "overtime.boundTasks",
+    "overtime.keepTasks",
 ]

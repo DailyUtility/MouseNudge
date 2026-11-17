@@ -64,8 +64,14 @@ func partLeaves(on key: String) -> [Leave] { leaves.filter { $0.disabled != true
 let overtimeURL = URL(fileURLWithPath: dir + "/overtime.json")
 struct Overtime: Codable, Equatable { var start: String? = nil; var end: String? = nil; var from: String; var to: String; var note: String; var rule: String?
     // A one-off ("once:") overtime may run on to `to` on this later day, all day in between.
-    var until: String? = nil; var disabled: Bool? = nil }
+    var until: String? = nil; var disabled: Bool? = nil
+    // What a task following only this overtime refers to; older entries get one when loaded.
+    var id: String? = nil }
 var overtimes: [Overtime] = []
+// A task follows one overtime as "overtime:<id>"; plain "overtime" is any overtime, including overtime added later.
+func otKey(_ o: Overtime) -> String { "overtime:" + (o.id ?? "") }
+func otID(_ f: String) -> String? { f.hasPrefix("overtime:") ? String(f.dropFirst(9)) : nil }
+func isOvertime(_ f: String) -> Bool { f == "overtime" || otID(f) != nil }
 // Periods: named stretches of the day (lunch, a meeting, focus time), on the days `rule` picks, on working days and days
 // with overtime. Tasks can follow them, and a task every few minutes (the nudge too) can be quiet in them. `rule` says which days: nil = every day, "once:yyyy-MM-dd", "weekly:W", "monthly:N:W" (the Nth W of the month, N = 1–5 or -1 for the last),
 // or "monthday:D" (day D of the month, or with D < 0 counted from the end: -1 is the last day; a missing day is skipped),
@@ -322,9 +328,9 @@ func inBreak(_ d: Date) -> Bool { covered(d, pausesOn) }
 func onPartLeave(_ d: Date, orEnd: Bool = false) -> Bool {
     covered(d) { partLeaves(on: dayKey.string(from: $0)).map { ($0.from!, $0.to!) } } || orEnd && onPartLeave(d - 60)
 }
-func overtimeSpans(_ d: Date) -> [(from: String, to: String)] {
+func overtimeSpans(_ d: Date, only id: String? = nil) -> [(from: String, to: String)] {
     let k = dayKey.string(from: d)
-    return overtime(on: d).map { o in o.until == nil ? (o.from, o.to) : (k == onceDay(o.rule) ? o.from : "00:00", k == o.until ? o.to : "24:00") }
+    return overtime(on: d).filter { id == nil || $0.id == id }.map { o in o.until == nil ? (o.from, o.to) : (k == onceDay(o.rule) ? o.from : "00:00", k == o.until ? o.to : "24:00") }
 }
 // "22:00–次日06:00", or for overtime over several days "11/14 09:00–11/16 15:00".
 func otSpanText(_ o: Overtime) -> String { o.until.map { "\(md(onceDay(o.rule) ?? "")) \(o.from)–\(md($0)) \(o.to)" } ?? spanText(o.from, o.to) }
@@ -350,7 +356,7 @@ func workClock() -> [(String, String)] {
 
 func inWindow(_ d: Date) -> Bool {
     if inBreak(d) { return false }
-    return covered(d, overtimeSpans) || covered(d, workSpans) && !covered(d, lunchSpans)
+    return covered(d) { overtimeSpans($0) } || covered(d, workSpans) && !covered(d, lunchSpans)
 }
 
 // The first moment after `d` when nudging may start again: the start of work hours on a working day, an overtime start, or a pause end.
@@ -407,7 +413,8 @@ struct Job: Codable, Equatable {
     var when: String; var at: String? = nil; var rule: String? = nil
     // A repeating "at" task that also runs on days off (weekends, holidays, leave).
     var anyDay: Bool? = nil
-    // Each "work" for work hours, "lunch", "overtime", or a period's id; nil means work hours and overtime.
+    // Each "work" for work hours, "lunch", "overtime" for any overtime, "overtime:<id>" for one, or a period's id; nil
+    // means work hours and any overtime.
     var follow: [String]? = nil; var offset: Int? = nil; var every: Int? = nil; var lead: Int? = nil; var lag: Int? = nil
     // The ids of the periods a task every few minutes (the nudge too) is quiet in.
     var skip: [String]? = nil
@@ -452,6 +459,7 @@ func followSpans(_ f: String, _ d: Date) -> [(from: String, to: String)] {
     case "work": return workSpans(d)
     case "lunch": return lunchSpans(d)
     case "overtime": return overtimeSpans(d)
+    case let f where otID(f) != nil: return overtimeSpans(d, only: otID(f))
     case let id: return periods.first { $0.id == id }.map { periodSpans($0, d) } ?? []
     }
 }
@@ -463,6 +471,7 @@ func followPaused(_ f: String) -> Bool {
     case "work": return false
     case "lunch": return lunchInWork() == nil
     case "overtime": return !overtimes.isEmpty && overtimes.allSatisfy { $0.disabled == true }
+    case let f where otID(f) != nil: return overtimes.first { $0.id == otID(f) }?.disabled == true
     case let id: return periods.first { $0.id == id }?.disabled == true
     }
 }
@@ -501,6 +510,7 @@ func followTitle(_ f: String) -> String {
     case "work": return T("apps.followWork")
     case "lunch": return T("form.lunch")
     case "overtime": return T("section.overtime")
+    case let f where otID(f) != nil: return overtimes.first { $0.id == otID(f) }.map { $0.note.isEmpty ? T("section.overtime") : $0.note } ?? T("section.overtime")
     case let id: return periods.first { $0.id == id }.map(periodName) ?? T("apps.periodGone")
     }
 }
@@ -532,10 +542,11 @@ func jobsDue(_ d: Date) -> [(job: Job, text: String)] {
             let early = TimeInterval((j.offset ?? 0) * 60)
             // Work and overtime followed together: where one runs on into the other only the start of the next is
             // told, and the end of the whole stretch is the end of work if it had any. Work comes first: its start is told
-            // even inside overtime, and overtime that began during work is told to start as work ends.
-            let fs = follows(j), both = fs.contains("work") && fs.contains("overtime")
+            // even inside overtime, and overtime that began during work is told to start as work ends. Any overtime and
+            // single overtimes count alike here.
+            let fs = follows(j), ot = fs.filter(isOvertime), both = fs.contains("work") && !ot.isEmpty
             for f in fs {
-                let other = both && ["work", "overtime"].contains(f) ? stretches([f == "work" ? "overtime" : "work"], around: m) : []
+                let other = both && (f == "work" || isOvertime(f)) ? stretches(f == "work" ? ot : ["work"], around: m) : []
                 for s in stretches([f], around: m) {
                     if j.when != "end" && s.start - early == m && !onPartLeave(s.start, orEnd: true) && !cutByLeave(s.start, end: false)
                         && (f == "work" || !other.contains(where: { $0.start < s.start && s.start < $0.end })) {
@@ -544,11 +555,12 @@ func jobsDue(_ d: Date) -> [(job: Job, text: String)] {
                     guard s.end - early == m && !onPartLeave(s.end, orEnd: true) && !cutByLeave(s.end, end: true) else { continue }
                     if !other.contains(where: { $0.start <= s.end && s.end < $0.end }) {
                         guard j.when != "start" else { continue }
-                        let whole = stretches(["work", "overtime"], around: m).first { $0.end == s.end }
+                        let whole = stretches(["work"] + ot, around: m).first { $0.end == s.end }
                         let hadWork = f == "work" || whole.map { w in other.contains { w.start <= $0.start && $0.end <= w.end } } ?? false
                         add(edgeText(j, hadWork ? "work" : f, end: true))
                     } else if f == "work" && j.when != "end" && other.contains(where: { $0.start < s.end && s.end < $0.end }) {
-                        add(edgeText(j, "overtime", end: false))
+                        let next = ot.first { k in stretches([k], around: m).contains { $0.start < s.end && s.end < $0.end } }
+                        add(edgeText(j, next ?? "overtime", end: false))
                     }
                 }
             }
@@ -592,7 +604,7 @@ func upcomingEvent(after d: Date, within: TimeInterval) -> (at: Date, name: Stri
     var m = Calendar.current.dateInterval(of: .minute, for: d)!.end
     while m.timeIntervalSince(d) <= within {
         let hm = hmFmt.string(from: m)
-        let working = covered(m, workSpans) || covered(m, overtimeSpans)
+        let working = covered(m, workSpans) || covered(m) { overtimeSpans($0) }
         let lunch = covered(m, lunchSpans) && lunchStart == hm ? [T("form.lunch")] : []
         let starting = !working ? lunch : lunch + periods.filter { $0.from == hm && periodOn($0, m) && (!$0.note.isEmpty || nudgeJob?.skip?.contains($0.id) == true) }.map(periodName)
         let names = starting + jobsDue(m).filter { $0.job.action == "notify" && $0.job.when != "every" }.map(\.text)
@@ -811,6 +823,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         loadHolidays()
         loadLeaves()
         loadJSON(overtimeURL, into: &overtimes)
+        if overtimes.contains(where: { $0.id == nil }) {
+            overtimes = overtimes.map { var o = $0; o.id = o.id ?? UUID().uuidString; return o }; saveJSON(overtimes, to: overtimeURL)
+        }
         if FileManager.default.fileExists(atPath: periodsURL.path) { loadJSON(periodsURL, into: &periods) }
         else { periods = [Period(from: "12:00", to: "13:00", note: T("break.lunch"), rule: nil)]; saveJSON(periods, to: periodsURL) }
         // A Mac that nudged before tasks existed keeps nudging at its interval; a fresh install has no nudge.
@@ -971,10 +986,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         func otOver(_ o: Overtime) -> Bool { o.until != nil ? over(o.until, nil, o.to) : over(onceDay(o.rule) ?? (o.rule == nil ? o.end : nil), o.from, o.to) }
         let b = periods.filter { over(onceDay($0.rule), $0.from, $0.to) }
         if !l.isEmpty { leaves.removeAll { over($0.end, $0.from, $0.to) }; saveLeaves(); rebuildLeaveMenu(); l.forEach { appendLog(T("log.leaveExpired", label($0))) } }
-        if !o.isEmpty { overtimes.removeAll(where: otOver); saveJSON(overtimes, to: overtimeURL); rebuildOvertimeMenu(); o.forEach { appendLog(T("log.overtimeExpired", otLabel($0))) } }
+        if !o.isEmpty { overtimes.removeAll(where: otOver); saveJSON(overtimes, to: overtimeURL); rebuildOvertimeMenu(); o.forEach { appendLog(T("log.overtimeExpired", otLabel($0))); dropFollowers(of: otKey($0)) } }
         if !b.isEmpty {
             periods.removeAll { over(onceDay($0.rule), $0.from, $0.to) }; saveJSON(periods, to: periodsURL); rebuildPeriodMenu()
-            b.forEach { appendLog(T("log.periodExpired", periodLabel($0))); dropFollowers(of: $0) }
+            b.forEach { appendLog(T("log.periodExpired", periodLabel($0))); dropFollowers(of: $0.id) }
         }
         // A one-off timed task goes once its minute has passed (tick runs it before pruning).
         func done(_ j: Job) -> Bool { j.when == "at" && over(onceDay(j.rule), nil, j.at) }
@@ -1347,14 +1362,16 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
                    button: old == nil ? nil : T("common.save"),
                    check: { rep.until() != nil || hmFmt.string(from: t2.dateValue) != hmFmt.string(from: t1.dateValue) ? nil : T("error.sameStartEnd") }) else { return }
         let o = Overtime(from: hmFmt.string(from: t1.dateValue), to: hmFmt.string(from: t2.dateValue), note: note.stringValue.trimmingCharacters(in: .whitespaces),
-                         rule: rep.rule(), until: rep.until(), disabled: old?.disabled)
+                         rule: rep.rule(), until: rep.until(), disabled: old?.disabled, id: old?.id ?? UUID().uuidString)
         put(o, over: old, in: &overtimes, label: otLabel, added: "log.overtimeAdded")
         saveJSON(overtimes, to: overtimeURL); rebuildOvertimeMenu(); replan(); checkApps()
     }
     func removeOvertime(_ i: Int) {
-        guard overtimes.indices.contains(i), confirmRemove(T("confirm.deleteOvertime"), otLabel(overtimes[i])) else { return }
-        let o = overtimes.remove(at: i); saveJSON(overtimes, to: overtimeURL); rebuildOvertimeMenu()
-        appendLog(T("log.overtimeDeleted", otLabel(o)))
+        guard overtimes.indices.contains(i) else { return }
+        let o = overtimes[i]
+        guard let keepTasks = confirmRemoveFollowed(T("confirm.deleteOvertime"), otLabel(o), key: otKey(o), bound: "overtime.boundTasks", keep: "overtime.keepTasks") else { return }
+        overtimes.remove(at: i); saveJSON(overtimes, to: overtimeURL); rebuildOvertimeMenu()
+        appendLog(T("log.overtimeDeleted", otLabel(o))); dropFollowers(of: otKey(o), keepTasks: keepTasks)
         next = nextSlot(after: Date()); tick()
     }
 
@@ -1461,27 +1478,28 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         saveJSON(periods, to: periodsURL); rebuildTasksMenu()
         replan(); checkApps()
     }
-    // Tasks that follow nothing else are deleted with it, or kept following nothing, as the person picks.
+    // Tasks that follow nothing but `key` are deleted with it, or kept following nothing, as the person picks: whether to
+    // keep them, or nil when cancelled.
+    func confirmRemoveFollowed(_ title: String, _ label: String, key: String, bound boundText: String, keep: String) -> Bool? {
+        let bound = jobs.filter { $0.follow == [key] }.map(jobLabel)
+        if bound.isEmpty { return confirmRemove(title, label) ? false : nil }
+        NSApp.activate(ignoringOtherApps: true)
+        let a = NSAlert(); a.messageText = title
+        a.informativeText = label + "\n\n" + T(boundText) + "\n" + bound.joined(separator: "\n") + "\n\n" + T("period.keepHelp")
+        a.addButton(withTitle: T("period.deleteWithTasks")); a.addButton(withTitle: T(keep))
+        a.addButton(withTitle: T("common.cancel")).keyEquivalent = "\u{1b}"
+        switch a.runModal() {
+        case .alertFirstButtonReturn: return false
+        case .alertSecondButtonReturn: return true
+        default: return nil
+        }
+    }
     func removePeriod(_ i: Int) {
         guard periods.indices.contains(i) else { return }
-        let p = periods[i], bound = jobs.filter { $0.follow == [p.id] }.map(jobLabel)
-        var keepTasks = false
-        if bound.isEmpty {
-            guard confirmRemove(T("confirm.deletePeriod"), periodLabel(p)) else { return }
-        } else {
-            NSApp.activate(ignoringOtherApps: true)
-            let a = NSAlert(); a.messageText = T("confirm.deletePeriod")
-            a.informativeText = periodLabel(p) + "\n\n" + T("period.boundTasks") + "\n" + bound.joined(separator: "\n") + "\n\n" + T("period.keepHelp")
-            a.addButton(withTitle: T("period.deleteWithTasks")); a.addButton(withTitle: T("period.keepTasks"))
-            a.addButton(withTitle: T("common.cancel")).keyEquivalent = "\u{1b}"
-            switch a.runModal() {
-            case .alertFirstButtonReturn: break
-            case .alertSecondButtonReturn: keepTasks = true
-            default: return
-            }
-        }
+        let p = periods[i]
+        guard let keepTasks = confirmRemoveFollowed(T("confirm.deletePeriod"), periodLabel(p), key: p.id, bound: "period.boundTasks", keep: "period.keepTasks") else { return }
         periods.remove(at: i); saveJSON(periods, to: periodsURL); rebuildPeriodMenu()
-        appendLog(T("log.periodDeleted", periodLabel(p))); dropFollowers(of: p, keepTasks: keepTasks)
+        appendLog(T("log.periodDeleted", periodLabel(p))); dropFollowers(of: p.id, keepTasks: keepTasks)
         next = nextSlot(after: Date()); tick()
     }
 
@@ -1505,7 +1523,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         switch f {
         case "work": return T("apps.followWork")
         case "lunch": return T("form.lunch") + " " + (lunchInWork() == nil ? T("lunch.none") : spanText(lunchStart, lunchEnd))
-        case "overtime": return T("section.overtime")
+        case "overtime": return T("follow.anyOvertime")
+        case let f where otID(f) != nil: return overtimes.first { $0.id == otID(f) }.map { T("section.overtime") + " " + otLabel($0) } ?? T("apps.periodGone")
         case let id: return periods.first { $0.id == id }.map { $0.note.isEmpty ? spanText($0.from, $0.to) : $0.note + " " + spanText($0.from, $0.to) } ?? T("apps.periodGone")
         }
     }
@@ -1605,14 +1624,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         let pickedFollow = old.map(follows) ?? []
         let shown = periods.filter { $0.disabled != true || pickedFollow.contains($0.id) }
         let lunch = lunchInWork() != nil || pickedFollow.contains("lunch") ? ["lunch"] : []
-        // Work hours and overtime show their times too, as lunch and the periods do; several overtimes are listed once each.
-        // Overtime is always offered, with no times while none is set, so a task can follow overtime added later.
-        let otTimes = overtimes.filter { $0.disabled != true }.map(otSpanText).reduce(into: [String]()) { if !$0.contains($1) { $0.append($1) } }
-        let overtime = ["overtime"]
-        var choices: [String] = ["work"] + lunch + overtime + shown.map(\.id)
+        // Any overtime has no times: it is always offered, and covers overtime added later too. Each overtime is also listed
+        // with its days and times, for a task that follows only that one; a paused or deleted one stays while followed.
+        let ots = ["overtime"] + overtimes.filter { $0.disabled != true || pickedFollow.contains(otKey($0)) }.map(otKey)
+        var choices: [String] = ["work"] + lunch + ots + shown.map(\.id)
         let workTitle = followName("work") + " " + spanText(workStart, workEnd)
-        let otTitles = overtime.map { _ in followName("overtime") + (otTimes.isEmpty ? "" : " " + otTimes.joined(separator: T("common.listSeparator"))) }
-        var titles = [workTitle] + lunch.map(followName) + otTitles + shown.map(periodLabel)
+        var titles = [workTitle] + lunch.map(followName) + ots.map(followName) + shown.map(periodLabel)
         for f in pickedFollow where !choices.contains(f) { choices.append(f); titles.append(T("apps.periodGone")) }
         let boxes = titles.map { NSButton(checkboxWithTitle: $0, target: nil, action: nil) }
         zip(choices, boxes).forEach { $1.state = pickedFollow.contains($0) ? .on : .off }
@@ -1672,7 +1689,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         if let o = old { j.id = o.id; j.disabled = o.disabled }
         if !t.isHidden { j.at = hmFmt.string(from: t.dateValue); j.rule = rep.rule() }
         if !anyDay.isHidden && anyDay.state == .on { j.anyDay = true }
-        if !follow.isHidden { j.follow = zip(choices, boxes).filter { $1.state == .on }.map(\.0) }
+        // Any overtime already covers each single one.
+        if !follow.isHidden { let f = zip(choices, boxes).filter { $1.state == .on }.map(\.0); j.follow = f.contains("overtime") ? f.filter { otID($0) == nil } : f }
         if !early.isHidden { j.offset = minutes(early).flatMap { $0 > 0 ? $0 : nil } }
         if !every.isHidden { j.every = minutes(every, 1...240) }
         if !skip.isHidden { j.skip = zip(skipChoices, skipBoxes).filter { $1.state == .on }.map(\.0); if j.skip!.isEmpty { j.skip = nil } }
@@ -1699,14 +1717,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         appendLog(T("log.taskDeleted", jobLabel(j))); jobsChanged()
     }
     // Tasks stop following a deleted period; one left following nothing is deleted.
-    func dropFollowers(of p: Period, keepTasks: Bool = false) {
-        guard jobs.contains(where: { $0.follow?.contains(p.id) == true || $0.skip?.contains(p.id) == true }) else { return }
+    func dropFollowers(of key: String, keepTasks: Bool = false) {
+        guard jobs.contains(where: { $0.follow?.contains(key) == true || $0.skip?.contains(key) == true }) else { return }
         if !keepTasks {
-            jobs.filter { $0.follow == [p.id] }.forEach { appendLog(T("log.taskDeleted", jobLabel($0))) }
-            jobs = jobs.filter { $0.follow != [p.id] }
+            jobs.filter { $0.follow == [key] }.forEach { appendLog(T("log.taskDeleted", jobLabel($0))) }
+            jobs = jobs.filter { $0.follow != [key] }
         }
-        jobs = jobs.map { var j = $0; j.follow = j.follow?.filter { $0 != p.id }
-            j.skip = j.skip?.filter { $0 != p.id }; if j.skip?.isEmpty == true { j.skip = nil }; return j }
+        jobs = jobs.map { var j = $0; j.follow = j.follow?.filter { $0 != key }
+            j.skip = j.skip?.filter { $0 != key }; if j.skip?.isEmpty == true { j.skip = nil }; return j }
         saveJSON(jobs, to: jobsURL); rebuildTasksMenu()
     }
     // Runs a task's shortcut, link or shell command (a login shell, as this user), and logs how it went.

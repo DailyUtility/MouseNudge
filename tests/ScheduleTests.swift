@@ -460,5 +460,26 @@ leaves = [Leave(start: "2026-11-14", end: "2026-11-14", note: "")]
 check("makeup: leave wins", window("2026-11-14 10:00"), false)
 reset()
 
+// Following one overtime: only that one counts; plain "overtime" counts any, including one added later.
+overtimes = [Overtime(from: "19:00", to: "21:00", note: "", rule: "once:2026-11-13", id: "a"),
+             Overtime(from: "22:00", to: "23:00", note: "Deploy", rule: "once:2026-11-13", id: "b")]
+jobs = [Job(action: "notify", when: "both", follow: ["overtime:a"])]
+check("one overtime: its start", due("2026-11-13 19:00"), [otStart])
+check("one overtime: the other is ignored", due("2026-11-13 22:00").count, 0)
+jobs = [Job(action: "notify", when: "both", follow: ["overtime:b"])]
+check("one overtime: named by its note", due("2026-11-13 22:00"), [T("reminder.periodStart", "Deploy")])
+jobs = [Job(action: "notify", when: "both", follow: ["overtime"])]
+check("any overtime: both start", [due("2026-11-13 19:00").count, due("2026-11-13 22:00").count], [1, 1])
+overtimes.append(Overtime(from: "06:00", to: "07:00", note: "", rule: "once:2026-11-13", id: "c"))
+check("any overtime: one added later counts", due("2026-11-13 06:00"), [otStart])
+overtimes = [Overtime(from: "18:00", to: "20:00", note: "", rule: "once:2026-11-13", id: "a")]
+jobs = [Job(action: "notify", when: "both", follow: ["work", "overtime:a"])]
+check("work + one overtime: starts as work ends", due("2026-11-13 18:00"), [otStart])
+check("work + one overtime: end of work after it", due("2026-11-13 20:00"), [T("reminder.workEnd")])
+overtimes[0].disabled = true
+check("one overtime: paused holds the task", jobHeld(Job(action: "notify", when: "both", follow: ["overtime:a"])), true)
+check("one overtime: key", otKey(overtimes[0]), "overtime:a")
+reset()
+
 print(failures == 0 ? "OK: \(checks) checks passed" : "\(failures) of \(checks) checks failed")
 exit(failures == 0 ? 0 : 1)
