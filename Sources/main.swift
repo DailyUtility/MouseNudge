@@ -1345,10 +1345,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         // Repeating ones first, then one-offs by date; finished one-offs are removed by pruneExpired.
         overtimes.sort { ($0.start ?? onceDay($0.rule) ?? "", $0.from) < ($1.start ?? onceDay($1.rule) ?? "", $1.from) }
         fill(overtimeRoot, overtimes.map { (otLabel($0), $0.disabled == true) }, toggle: { [unowned self] i in
-            defer { saveJSON(overtimes, to: overtimeURL); replan(); rebuildPeriodMenu() }; return flip(&overtimes[i].disabled, otLabel(overtimes[i]))
+            defer { saveJSON(overtimes, to: overtimeURL); replan(); rebuildTasksMenu() }; return flip(&overtimes[i].disabled, otLabel(overtimes[i]))
         }, edit: { [unowned self] in editOvertime(overtimes[$0]) }, remove: removeOvertime, add: (T("menu.addOvertime"), #selector(addOvertime), "o"))
-        // Periods say whether the nudge runs in them, which depends on overtime.
-        rebuildPeriodMenu()
+        // Tasks show an overtime's times and whether it is paused, and periods whether the nudge runs in them.
+        rebuildTasksMenu()
     }
     @objc func addOvertime() { editOvertime(nil) }
     func editOvertime(_ old: Overtime?) {
@@ -1405,7 +1405,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
             !nudging ? "" : quiet.contains(p.id) ? T("common.paren", T("period.nudgePaused")) : periodMeetsWork(p) ? T("common.paren", T("period.nudgeKept")) : ""
         }
         fill(periodRoot, periods.map { (periodLabel($0) + tag($0), $0.disabled == true) }, toggle: { [unowned self] i in
-            defer { saveJSON(periods, to: periodsURL); replan(); checkApps() }; return flip(&periods[i].disabled, periodLabel(periods[i]))
+            defer { saveJSON(periods, to: periodsURL); replan(); checkApps(); rebuildTasksMenu(periods: false) }; return flip(&periods[i].disabled, periodLabel(periods[i]))
         }, edit: { [unowned self] in editPeriod(periods[$0]) }, remove: removePeriod, add: (T("menu.addPeriod"), #selector(addPeriod), "b"), head: [workHoursItem])
     }
     // The Repeat/Date/Week/Weekday rows shared by overtime, periods and reminders. Keep `sync` alive while the form is open; `rule` reads the choice.
@@ -1560,12 +1560,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         guard let s = j.skip, !s.isEmpty else { return "" }
         return T("common.paren", T("job.quietIn", s.map(followTitle).joined(separator: T("common.listSeparator"))))
     }
-    func rebuildTasksMenu() {
+    // `periods` false leaves the periods menu alone, for a change made in it.
+    func rebuildTasksMenu(periods: Bool = true) {
         fill(tasksRoot, jobs.map { (jobLabel($0) + (jobHeld($0) ? T("common.paren", T("job.heldTag")) : jobUnbound($0) ? T("common.paren", T("job.unboundTag")) : ""), $0.disabled == true) }, toggle: { [unowned self] i in
             defer { saveJSON(jobs, to: jobsURL); jobsChanged() }; return flip(&jobs[i].disabled, jobLabel(jobs[i]))
         }, edit: { [unowned self] in editJob(jobs[$0]) }, remove: removeJob, add: (T("menu.addTask"), #selector(addJob), ""),
            test: { [unowned self] in testJob(jobs[$0]) })
-        rebuildPeriodMenu()
+        if periods { rebuildPeriodMenu() }
     }
     // Runs a task once now, whatever its time, turned off or paused, so its setup can be checked: the pop-up shows the text
     // it would show (at its start, for one told at both edges), the nudge moves the cursor, an app is opened.
@@ -1633,6 +1634,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         for f in pickedFollow where !choices.contains(f) { choices.append(f); titles.append(T("apps.periodGone")) }
         let boxes = titles.map { NSButton(checkboxWithTitle: $0, target: nil, action: nil) }
         zip(choices, boxes).forEach { $1.state = pickedFollow.contains($0) ? .on : .off }
+        // Any overtime already covers each single one, so those are greyed out while it is ticked.
+        let anyOT = boxes[choices.firstIndex(of: "overtime")!], oneOT = zip(choices, boxes).filter { otID($0.0) != nil }.map(\.1)
+        let syncOT = ClosureTarget { oneOT.forEach { $0.isEnabled = anyOT.state == .off } }
+        anyOT.target = syncOT; anyOT.action = #selector(ClosureTarget.fire); syncOT.fire()
+        defer { withExtendedLifetime(syncOT) {} }
         let follow = NSStackView(views: boxes); follow.orientation = .vertical; follow.alignment = .leading; follow.spacing = 4
         // The periods to be quiet in, for a task every few minutes; kept the same way as those followed.
         let pickedSkip = old?.skip ?? []
