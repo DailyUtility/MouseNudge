@@ -1904,10 +1904,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     func buildHolidayMenu() {
         let cache = cachedCalendars()
         let k = dayKey.string(from: Date()), year = String(k.prefix(4))
-        // Beside each calendar: how many of this year's holidays are still ahead, of how many; blank when none are saved.
+        // Beside each calendar: how many of this year's holidays have passed, of how many, as on the holiday line; blank when none are saved.
         func count(_ days: [String: String]?) -> String {
             let keys = (days ?? [:]).keys.filter { $0.hasPrefix(year) }
-            return keys.isEmpty ? "" : T("holiday.calendarCount", String(keys.filter { $0 >= k }.count), String(keys.count))
+            return keys.isEmpty ? "" : T("holiday.calendarCount", String(keys.filter { $0 < k }.count), String(keys.count))
         }
         let rows = (holidaySources + [""]).map { source in
             (source, source.isEmpty ? T("menu.noHolidayCalendar")
