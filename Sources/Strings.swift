@@ -286,6 +286,8 @@ let translations: [String: [String: String]] = [
         "follow.anyOvertime": "所有加班",
         "overtime.boundTasks": "这些定时任务只跟随这段加班：",
         "overtime.keepTasks": "只删加班，保留任务",
+        "form.taskName": "名称",
+        "job.titlePlaceholder": "可选，菜单里只显示这个名字",
     ],
     "en": [
         "week.first": "1st",
@@ -573,6 +575,8 @@ let translations: [String: [String: String]] = [
         "follow.anyOvertime": "Any overtime",
         "overtime.boundTasks": "These tasks follow only this overtime:",
         "overtime.keepTasks": "Delete overtime, keep tasks",
+        "form.taskName": "Name",
+        "job.titlePlaceholder": "Optional; shown in the menu instead",
     ],
     "zh-Hant": [
         "week.first": "第一個",
@@ -860,6 +864,8 @@ let translations: [String: [String: String]] = [
         "follow.anyOvertime": "所有加班",
         "overtime.boundTasks": "這些定時任務只跟隨這段加班：",
         "overtime.keepTasks": "只刪加班，保留任務",
+        "form.taskName": "名稱",
+        "job.titlePlaceholder": "選填，選單裡只顯示這個名稱",
     ],
     "ja": [
         "week.first": "第1",
@@ -1147,6 +1153,8 @@ let translations: [String: [String: String]] = [
         "follow.anyOvertime": "すべての残業",
         "overtime.boundTasks": "次のタスクはこの残業だけに従っています：",
         "overtime.keepTasks": "残業だけ削除",
+        "form.taskName": "名前",
+        "job.titlePlaceholder": "任意。メニューにはこの名前だけ表示",
     ],
     "ko": [
         "week.first": "첫째",
@@ -1434,6 +1442,8 @@ let translations: [String: [String: String]] = [
         "follow.anyOvertime": "모든 초과근무",
         "overtime.boundTasks": "다음 작업은 이 초과근무만 따릅니다:",
         "overtime.keepTasks": "초과근무만 삭제",
+        "form.taskName": "이름",
+        "job.titlePlaceholder": "선택 사항, 메뉴에는 이 이름만 표시",
     ],
     "ms": [
         "week.first": "pertama",
@@ -1721,6 +1731,8 @@ let translations: [String: [String: String]] = [
         "follow.anyOvertime": "Sebarang lebih masa",
         "overtime.boundTasks": "Tugasan ini hanya mengikut lebih masa ini:",
         "overtime.keepTasks": "Padam lebih masa, simpan tugasan",
+        "form.taskName": "Nama",
+        "job.titlePlaceholder": "Pilihan; dipaparkan dalam menu",
     ],
     "es": [
         "week.first": "primer",
@@ -2008,6 +2020,8 @@ let translations: [String: [String: String]] = [
         "follow.anyOvertime": "Cualquier hora extra",
         "overtime.boundTasks": "Estas tareas solo siguen estas horas extra:",
         "overtime.keepTasks": "Eliminar horas extra y conservar tareas",
+        "form.taskName": "Nombre",
+        "job.titlePlaceholder": "Opcional; se muestra en el menú",
     ],
     "fr": [
         "week.first": "1er",
@@ -2295,6 +2309,8 @@ let translations: [String: [String: String]] = [
         "follow.anyOvertime": "Toutes heures sup.",
         "overtime.boundTasks": "Ces tâches ne suivent que ces heures sup. :",
         "overtime.keepTasks": "Supprimer les heures sup., garder les tâches",
+        "form.taskName": "Nom",
+        "job.titlePlaceholder": "Facultatif ; affiché dans le menu",
     ],
     "de": [
         "week.first": "1.",
@@ -2582,6 +2598,8 @@ let translations: [String: [String: String]] = [
         "follow.anyOvertime": "Alle Überstunden",
         "overtime.boundTasks": "Diese Aufgaben folgen nur diesen Überstunden:",
         "overtime.keepTasks": "Nur Überstunden löschen",
+        "form.taskName": "Name",
+        "job.titlePlaceholder": "Optional; wird im Menü angezeigt",
     ],
 ]
 // Template order.
@@ -2871,4 +2889,6 @@ let translationKeys: [String] = [
     "follow.anyOvertime",
     "overtime.boundTasks",
     "overtime.keepTasks",
+    "form.taskName",
+    "job.titlePlaceholder",
 ]

@@ -409,6 +409,8 @@ struct Job: Codable, Equatable {
     var action: String
     // The pop-up text (empty: a default one), shortcut name, link or shell command.
     var text: String = ""
+    // A name of the person's own, shown in the menu instead of what the task does; `name` is an app task's app.
+    var title: String? = nil
     var name: String? = nil; var path: String? = nil; var bundleID: String? = nil; var keepOpen: Bool? = nil
     var when: String; var at: String? = nil; var rule: String? = nil
     // A repeating "at" task that also runs on days off (weekends, holidays, leave).
@@ -715,7 +717,8 @@ final class EntryRowView: NSView {
             trash.leadingAnchor.constraint(equalTo: toggle.trailingAnchor, constant: 4), trash.centerYAnchor.constraint(equalTo: centerYAnchor),
             trash.widthAnchor.constraint(equalToConstant: 20), trash.trailingAnchor.constraint(equalTo: trailingAnchor, constant: -12),
         ])
-        frame.size.width = max(240, label.intrinsicContentSize.width + 36 + buttonsWidth)
+        // A long label is cut off, with the whole of it shown on hover, so the menu does not grow very wide.
+        frame.size.width = max(240, min(420, label.intrinsicContentSize.width) + 36 + buttonsWidth)
         refresh()
     }
     required init?(coder: NSCoder) { fatalError() }
@@ -1175,12 +1178,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     // the add item and any extra items. `head` items go first, as they are. `toggle` flips entry i and returns whether it is now off; `edit` opens its form;
     // `remove` asks, then deletes.
     func fill(_ root: NSMenuItem, _ rows: [(String, Bool)], toggle: @escaping (Int) -> Bool, edit: @escaping (Int) -> Void, remove: @escaping (Int) -> Void,
-              add: (String, Selector, String), head: [NSMenuItem] = [], extra: [NSMenuItem] = [], test: ((Int) -> Void)? = nil) {
+              add: (String, Selector, String), head: [NSMenuItem] = [], extra: [NSMenuItem] = [], test: ((Int) -> Void)? = nil, tips: [String] = []) {
         let name = root.representedObject as! String
         sectionRows[name]?.forEach { if $0.menu != nil { menu.removeItem($0) } }
         var items: [NSMenuItem] = head + rows.enumerated().map { i, r in
             let it = NSMenuItem(title: r.0, action: nil, keyEquivalent: "")
-            it.view = EntryRowView(title: r.0, disabled: r.1, onToggle: { toggle(i) }, onEdit: { edit(i) }, onDelete: { remove(i) }, onTest: test.map { t in { t(i) } }); return it
+            it.view = EntryRowView(title: r.0, disabled: r.1, onToggle: { toggle(i) }, onEdit: { edit(i) }, onDelete: { remove(i) }, onTest: test.map { t in { t(i) } })
+            it.view?.toolTip = tips.indices.contains(i) ? tips[i] : r.0; return it
         }
         if rows.isEmpty && head.isEmpty { let none = NSMenuItem(title: T("menu.none"), action: nil, keyEquivalent: ""); none.isEnabled = false; items.append(none) }
         let a = NSMenuItem(title: add.0, action: add.1, keyEquivalent: add.2); a.target = self
@@ -1562,10 +1566,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     }
     // `periods` false leaves the periods menu alone, for a change made in it.
     func rebuildTasksMenu(periods: Bool = true) {
-        fill(tasksRoot, jobs.map { (jobLabel($0) + (jobHeld($0) ? T("common.paren", T("job.heldTag")) : jobUnbound($0) ? T("common.paren", T("job.unboundTag")) : ""), $0.disabled == true) }, toggle: { [unowned self] i in
+        fill(tasksRoot, jobs.map { ((($0.title ?? "").isEmpty ? jobLabel($0) : $0.title!) + (jobHeld($0) ? T("common.paren", T("job.heldTag")) : jobUnbound($0) ? T("common.paren", T("job.unboundTag")) : ""), $0.disabled == true) }, toggle: { [unowned self] i in
             defer { saveJSON(jobs, to: jobsURL); jobsChanged() }; return flip(&jobs[i].disabled, jobLabel(jobs[i]))
         }, edit: { [unowned self] in editJob(jobs[$0]) }, remove: removeJob, add: (T("menu.addTask"), #selector(addJob), ""),
-           test: { [unowned self] in testJob(jobs[$0]) })
+           test: { [unowned self] in testJob(jobs[$0]) }, tips: jobs.map(jobLabel))
         if periods { rebuildPeriodMenu() }
     }
     // Runs a task once now, whatever its time, turned off or paused, so its setup can be checked: the pop-up shows the text
@@ -1601,7 +1605,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         let actionPop = NSPopUpButton(), whenPop = NSPopUpButton()
         actionPop.addItems(withTitles: actions.map { T("job." + $0) }); actionPop.selectItem(at: actions.firstIndex(of: old?.action ?? "notify") ?? 0)
         whenPop.addItems(withTitles: whens.map { T("when." + $0) }); whenPop.selectItem(at: whens.firstIndex(of: old?.when ?? "at") ?? 0)
-        let message = noteField(), shortcut = noteField(), link = noteField(), command = noteField()
+        let message = noteField(), shortcut = noteField(), link = noteField(), command = noteField(), title = noteField()
+        title.placeholderString = T("job.titlePlaceholder"); title.stringValue = old?.title ?? ""
         message.placeholderString = T("job.messagePlaceholder"); shortcut.placeholderString = T("job.shortcutPlaceholder")
         link.placeholderString = "https://"; command.placeholderString = T("job.commandPlaceholder")
         let textFields = ["notify": message, "shortcut": shortcut, "url": link, "script": command]
@@ -1676,7 +1681,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         func minutes(_ f: NSTextField, _ r: ClosedRange<Int> = 0...240) -> Int? { Int(trimmed(f)).flatMap { r.contains($0) ? $0 : nil } }
         // Only the fields shown are checked and saved.
         guard form(T(old == nil ? "menu.addTask" : "edit.task"), T("task.help"),
-                   [(T("form.action"), actionPop), (T("form.message"), message), (T("form.shortcut"), shortcut), (T("form.link"), link),
+                   [(T("form.taskName"), title), (T("form.action"), actionPop), (T("form.message"), message), (T("form.shortcut"), shortcut), (T("form.link"), link),
                     (T("form.command"), command), (T("form.app"), appButton), (T("form.when"), whenPop)] + rep.rows
                    + [(T("form.at"), t), ("", anyDay), (T("form.follow"), follow), (T("form.early"), early), (T("form.every"), every), (T("form.skip"), skip), (T("form.openEarly"), lead),
                       (T("form.quit"), quit), (T("form.closeLate"), lag), ("", locked)],
@@ -1693,6 +1698,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         let a = actions[actionPop.indexOfSelectedItem], timed = !["nudge", "app"].contains(a)
         var j = Job(action: a, text: textFields[a].map(trimmed) ?? "", when: timed ? whens[whenPop.indexOfSelectedItem] : a == "app" ? "during" : "every")
         if let o = old { j.id = o.id; j.disabled = o.disabled }
+        if !trimmed(title).isEmpty { j.title = trimmed(title) }
         if !t.isHidden { j.at = hmFmt.string(from: t.dateValue); j.rule = rep.rule() }
         if !anyDay.isHidden && anyDay.state == .on { j.anyDay = true }
         // Any overtime already covers each single one.
