@@ -24,7 +24,7 @@ A task is an action and when it runs. The form only shows the fields that the ch
 
 - **Actions:** a pop-up, opening (and quitting) an app, running a shortcut, opening a link, running a shell command (in your login shell), or nudging the mouse.
 - **When:** at a set time (daily, weekly, monthly or one-off; repeating ones on working days only unless **Also on days off** is ticked), at the start or end of what it follows (optionally a few minutes early), or every few minutes during it.
-- **Follows:** tick any of Work, Lunch, Overtime and your periods. Each shows its time. Overtime is listed only once some is set. Nothing is ticked for a new task, and a task needs at least one. With both Work and Overtime ticked, work running into overtime tells you overtime is starting, and the end-of-work pop-up comes when the overtime ends.
+- **Follows:** tick any of Work, Lunch, Overtime and your periods. Each shows its time; Overtime shows none until some is set. Nothing is ticked for a new task, and a task needs at least one. With both Work and Overtime ticked, work running into overtime tells you overtime is starting, and the end-of-work pop-up comes when the overtime ends.
 - **Quiet during:** a task every few minutes can pause in chosen periods, such as no water reminders in meetings.
 - An **app** task keeps the app open during the times it follows. It opens a set number of minutes before and quits a set number of minutes after (both default 0), or is only opened and never quit.
 - The **Test** button (⚡) runs a task once right away, to check it is set up right.

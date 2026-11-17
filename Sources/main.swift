@@ -1606,9 +1606,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         let shown = periods.filter { $0.disabled != true || pickedFollow.contains($0.id) }
         let lunch = lunchInWork() != nil || pickedFollow.contains("lunch") ? ["lunch"] : []
         // Work hours and overtime show their times too, as lunch and the periods do; several overtimes are listed once each.
-        // Overtime with no times set is left off, unless the task already follows it.
+        // Overtime is always offered, with no times while none is set, so a task can follow overtime added later.
         let otTimes = overtimes.filter { $0.disabled != true }.map(otSpanText).reduce(into: [String]()) { if !$0.contains($1) { $0.append($1) } }
-        let overtime = !otTimes.isEmpty || pickedFollow.contains("overtime") ? ["overtime"] : []
+        let overtime = ["overtime"]
         var choices: [String] = ["work"] + lunch + overtime + shown.map(\.id)
         let workTitle = followName("work") + " " + spanText(workStart, workEnd)
         let otTitles = overtime.map { _ in followName("overtime") + (otTimes.isEmpty ? "" : " " + otTimes.joined(separator: T("common.listSeparator"))) }
