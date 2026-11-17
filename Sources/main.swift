@@ -695,6 +695,8 @@ final class StayOpenMenuItem: NSMenuItem {
     override var state: NSControl.StateValue { didSet { row.sync() } }
     override var isEnabled: Bool { didSet { row.sync() } }
     override var image: NSImage? { didSet { row.sync() } }
+    // Grey text on the right, such as a count.
+    var detail = "" { didSet { row.sync() } }
 }
 
 final class StayOpenRowView: NSView {
@@ -717,7 +719,7 @@ final class StayOpenRowView: NSView {
         label.stringValue = item.title
         icon.image = item.image; icon.isHidden = item.image == nil
         check.isHidden = item.state != .on
-        key.stringValue = item.keyEquivalent.isEmpty ? "" : "⌘" + item.keyEquivalent.uppercased()
+        key.stringValue = item.keyEquivalent.isEmpty ? (item as? StayOpenMenuItem)?.detail ?? "" : "⌘" + item.keyEquivalent.uppercased()
         let h = bounds.height
         var x: CGFloat = 22
         check.frame = NSRect(x: 8, y: (h - 14) / 2, width: 14, height: 14)
@@ -728,7 +730,7 @@ final class StayOpenRowView: NSView {
         if frame.width < width { frame.size.width = width }
         key.frame.origin = NSPoint(x: bounds.width - key.frame.width - 14, y: (h - key.frame.height) / 2)
         key.autoresizingMask = [.minXMargin]
-        setAccessibilityLabel(item.title)
+        setAccessibilityLabel(key.stringValue.isEmpty || !item.keyEquivalent.isEmpty ? item.title : item.title + ", " + key.stringValue)
         refresh()
     }
     override func resizeSubviews(withOldSize s: NSSize) { super.resizeSubviews(withOldSize: s); key.frame.origin.x = bounds.width - key.frame.width - 14 }
@@ -1901,11 +1903,17 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     // then this year's holidays, past days greyed out. Once this year's are all over, next year's follow if the calendar has them.
     func buildHolidayMenu() {
         let cache = cachedCalendars()
+        let k = dayKey.string(from: Date()), year = String(k.prefix(4))
+        // Beside each calendar: how many of this year's holidays are still ahead, of how many; blank when none are saved.
+        func count(_ days: [String: String]?) -> String {
+            let keys = (days ?? [:]).keys.filter { $0.hasPrefix(year) }
+            return keys.isEmpty ? "" : T("holiday.calendarCount", String(keys.filter { $0 >= k }.count), String(keys.count))
+        }
         let rows = (holidaySources + [""]).map { source in
             (source, source.isEmpty ? T("menu.noHolidayCalendar")
-                : (source == holidaySource ? holidays.name : nil) ?? cache[source]?.name ?? source.replacingOccurrences(of: #"^\w+://"#, with: "", options: .regularExpression))
+                : (source == holidaySource ? holidays.name : nil) ?? cache[source]?.name ?? source.replacingOccurrences(of: #"^\w+://"#, with: "", options: .regularExpression),
+             source.isEmpty ? "" : count(source == holidaySource ? holidays.days : cache[source]?.days))
         }
-        let k = dayKey.string(from: Date()), year = String(k.prefix(4))
         let keysIn = { (y: String) in holidays.days.keys.filter { $0.hasPrefix(y) }.sorted() }
         var years = [(year, keysIn(year))]
         if !years[0].1.contains(where: { $0 >= k }), let y = Int(year) {
@@ -1913,11 +1921,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
             if !next.isEmpty { years.append((String(y + 1), next)) }
         }
         let listed: [String] = years.flatMap { y, keys -> [String] in [y] + keys.map { $0 + (holidays.days[$0] ?? "") } }
-        let shown: [String] = rows.map { $0.0 + "\t" + $0.1 } + [holidaySource, k] + listed
+        let shown: [String] = rows.map { $0.0 + "\t" + $0.1 + "\t" + $0.2 } + [holidaySource, k] + listed
         guard shown != holidayMenuShown, let menu = holidayLine.submenu else { return }
         holidayMenuShown = shown; menu.removeAllItems()
-        for (source, name) in rows {
-            let it = StayOpenMenuItem(name, action: #selector(switchHolidayCalendar(_:)))
+        for (source, name, detail) in rows {
+            let it = StayOpenMenuItem(name, action: #selector(switchHolidayCalendar(_:))); it.detail = detail
             it.target = self; it.representedObject = source; it.toolTip = source.isEmpty ? nil : source
             it.state = source == holidaySource ? .on : .off
             menu.addItem(it)

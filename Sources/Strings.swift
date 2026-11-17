@@ -288,6 +288,7 @@ let translations: [String: [String: String]] = [
         "overtime.keepTasks": "只删加班，保留任务",
         "form.taskName": "名称",
         "job.titlePlaceholder": "可选，菜单里只显示这个名字",
+        "holiday.calendarCount": "剩 %@ / 共 %@",
     ],
     "en": [
         "week.first": "1st",
@@ -577,6 +578,7 @@ let translations: [String: [String: String]] = [
         "overtime.keepTasks": "Delete overtime, keep tasks",
         "form.taskName": "Name",
         "job.titlePlaceholder": "Optional; shown in the menu instead",
+        "holiday.calendarCount": "%@ left of %@",
     ],
     "zh-Hant": [
         "week.first": "第一個",
@@ -866,6 +868,7 @@ let translations: [String: [String: String]] = [
         "overtime.keepTasks": "只刪加班，保留任務",
         "form.taskName": "名稱",
         "job.titlePlaceholder": "選填，選單裡只顯示這個名稱",
+        "holiday.calendarCount": "剩 %@ / 共 %@",
     ],
     "ja": [
         "week.first": "第1",
@@ -1155,6 +1158,7 @@ let translations: [String: [String: String]] = [
         "overtime.keepTasks": "残業だけ削除",
         "form.taskName": "名前",
         "job.titlePlaceholder": "任意。メニューにはこの名前だけ表示",
+        "holiday.calendarCount": "残り %@ / 全 %@",
     ],
     "ko": [
         "week.first": "첫째",
@@ -1444,6 +1448,7 @@ let translations: [String: [String: String]] = [
         "overtime.keepTasks": "초과근무만 삭제",
         "form.taskName": "이름",
         "job.titlePlaceholder": "선택 사항, 메뉴에는 이 이름만 표시",
+        "holiday.calendarCount": "%@ 남음 / 총 %@",
     ],
     "ms": [
         "week.first": "pertama",
@@ -1733,6 +1738,7 @@ let translations: [String: [String: String]] = [
         "overtime.keepTasks": "Padam lebih masa, simpan tugasan",
         "form.taskName": "Nama",
         "job.titlePlaceholder": "Pilihan; dipaparkan dalam menu",
+        "holiday.calendarCount": "baki %@ / %@",
     ],
     "es": [
         "week.first": "primer",
@@ -2022,6 +2028,7 @@ let translations: [String: [String: String]] = [
         "overtime.keepTasks": "Eliminar horas extra y conservar tareas",
         "form.taskName": "Nombre",
         "job.titlePlaceholder": "Opcional; se muestra en el menú",
+        "holiday.calendarCount": "quedan %@ de %@",
     ],
     "fr": [
         "week.first": "1er",
@@ -2311,6 +2318,7 @@ let translations: [String: [String: String]] = [
         "overtime.keepTasks": "Supprimer les heures sup., garder les tâches",
         "form.taskName": "Nom",
         "job.titlePlaceholder": "Facultatif ; affiché dans le menu",
+        "holiday.calendarCount": "%@ restants sur %@",
     ],
     "de": [
         "week.first": "1.",
@@ -2600,6 +2608,7 @@ let translations: [String: [String: String]] = [
         "overtime.keepTasks": "Nur Überstunden löschen",
         "form.taskName": "Name",
         "job.titlePlaceholder": "Optional; wird im Menü angezeigt",
+        "holiday.calendarCount": "noch %@ von %@",
     ],
 ]
 // Template order.
@@ -2891,4 +2900,5 @@ let translationKeys: [String] = [
     "overtime.keepTasks",
     "form.taskName",
     "job.titlePlaceholder",
+    "holiday.calendarCount",
 ]
